@@ -179,14 +179,11 @@ class WavRecorder:
         if not validate_pcm_chunk(pcm_data):
             return 0
 
-        # Safety: check if we've exceeded the maximum recording duration
-        if self.duration >= MAX_RECORDING_SECONDS:
-            logger.warning(
-                f"Max recording duration ({MAX_RECORDING_SECONDS}s) reached. "
-                f"Auto-stopping recording."
-            )
+        # Auto-split recording every 15 minutes (900 seconds / ~28.8MB)
+        if self.duration >= 900:
+            logger.info("15 minutes reached → Auto-splitting recording file")
             self.stop()
-            return 0
+            self.start()
 
         # Write PCM data to file
         self._file.write(pcm_data)
