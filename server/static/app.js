@@ -170,8 +170,11 @@ async function connectWebSocket() {
                 float32Array[i] = int16Array[i] / 32768.0; 
             }
             
-            // 1. Send to AudioWorklet for playback
-            if (workletNode && audioCtx.state === 'running') {
+            // 1. Send to AudioWorklet for live playback
+            if (workletNode) {
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
                 workletNode.port.postMessage({
                     type: 'pcm',
                     samples: float32Array
