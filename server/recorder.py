@@ -15,6 +15,7 @@ saved recordings from the recordings/ directory.
 
 import os
 import time
+import shutil
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
@@ -384,3 +385,22 @@ class RecordingManager:
         """Get total size of all recordings in bytes."""
         ensure_recordings_dir()
         return sum(f.stat().st_size for f in self._dir.glob("*.wav"))
+
+    def get_storage_info(self) -> dict:
+        """Get storage details for recordings and disk availability."""
+        ensure_recordings_dir()
+        recordings_bytes = self.get_total_size()
+
+        try:
+            total, used, free = shutil.disk_usage(self._dir)
+        except OSError:
+            total, used, free = 0, 0, 0
+
+        return {
+            "recordings_bytes": recordings_bytes,
+            "recordings_human": format_size(recordings_bytes),
+            "free_bytes": free,
+            "free_human": format_size(free),
+            "total_bytes": total,
+            "total_human": format_size(total),
+        }

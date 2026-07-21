@@ -47,8 +47,9 @@ const ui = {
     volumeFill: document.getElementById('volume-fill'),
     waveformOverlay: document.getElementById('waveform-overlay'),
     
-    // Recordings
+    // Recordings & Storage
     recordingsList: document.getElementById('recordings-list'),
+    storageInfo: document.getElementById('storage-info'),
     
     // Notifications
     toastContainer: document.getElementById('toast-container')
@@ -451,6 +452,9 @@ async function fetchRecordings() {
         const res = await fetch(`${API_BASE}/recordings`);
         const data = await res.json();
         renderRecordings(data.recordings || []);
+        if (data.storage && ui.storageInfo) {
+            ui.storageInfo.innerHTML = `💾 Recordings: <strong>${data.storage.recordings_human}</strong> | Free Disk: <strong>${data.storage.free_human}</strong>`;
+        }
     } catch (e) {
         console.error('Failed to fetch recordings:', e);
     }

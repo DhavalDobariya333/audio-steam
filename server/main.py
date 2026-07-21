@@ -276,15 +276,15 @@ async def cancel_recording():
 @app.get("/api/recordings")
 async def list_recordings():
     """
-    List all saved recordings with metadata.
+    List all saved recordings with metadata and storage usage.
 
-    Returns an array of recording objects, sorted by newest first.
-    Each object includes: filename, size, duration, created_at.
+    Returns an array of recording objects, sorted by newest first, plus disk storage info.
     """
     recordings = recording_mgr.list_recordings()
     return {
         "recordings": [r.to_dict() for r in recordings],
         "count": len(recordings),
+        "storage": recording_mgr.get_storage_info(),
     }
 
 

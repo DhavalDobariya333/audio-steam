@@ -77,8 +77,11 @@
 
         <!-- Saved Recordings Card -->
         <section class="card">
-            <header class="card__header">
+            <header class="card__header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                 <h2 class="card__title">Saved Recordings</h2>
+                <div id="storage-info" class="connection-badge" style="font-size: 0.85rem; font-weight: 500;">
+                    💾 Recordings: 0 MB | Free Disk: Checking...
+                </div>
             </header>
             
             <ul id="recordings-list" class="recordings-list">
