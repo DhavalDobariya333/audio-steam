@@ -15,6 +15,7 @@ saved recordings from the recordings/ directory.
 
 import os
 import time
+import shutil
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field
@@ -179,14 +180,11 @@ class WavRecorder:
         if not validate_pcm_chunk(pcm_data):
             return 0
 
-        # Safety: check if we've exceeded the maximum recording duration
-        if self.duration >= MAX_RECORDING_SECONDS:
-            logger.warning(
-                f"Max recording duration ({MAX_RECORDING_SECONDS}s) reached. "
-                f"Auto-stopping recording."
-            )
+        # Auto-split recording every 15 minutes (900 seconds / ~28.8MB)
+        if self.duration >= 900:
+            logger.info("15 minutes reached → Auto-splitting recording file")
             self.stop()
-            return 0
+            self.start()
 
         # Write PCM data to file
         self._file.write(pcm_data)
@@ -387,3 +385,22 @@ class RecordingManager:
         """Get total size of all recordings in bytes."""
         ensure_recordings_dir()
         return sum(f.stat().st_size for f in self._dir.glob("*.wav"))
+
+    def get_storage_info(self) -> dict:
+        """Get storage details for recordings and disk availability."""
+        ensure_recordings_dir()
+        recordings_bytes = self.get_total_size()
+
+        try:
+            total, used, free = shutil.disk_usage(self._dir)
+        except OSError:
+            total, used, free = 0, 0, 0
+
+        return {
+            "recordings_bytes": recordings_bytes,
+            "recordings_human": format_size(recordings_bytes),
+            "free_bytes": free,
+            "free_human": format_size(free),
+            "total_bytes": total,
+            "total_human": format_size(total),
+        }

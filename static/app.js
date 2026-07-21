@@ -47,8 +47,9 @@ const ui = {
     volumeFill: document.getElementById('volume-fill'),
     waveformOverlay: document.getElementById('waveform-overlay'),
     
-    // Recordings
+    // Recordings & Storage
     recordingsList: document.getElementById('recordings-list'),
+    storageInfo: document.getElementById('storage-info'),
     
     // Notifications
     toastContainer: document.getElementById('toast-container')
@@ -304,16 +305,19 @@ function updateConnectionStatus(status) {
         ui.connStatus.textContent = 'Connected';
         ui.connStatus.className = 'connection-badge connection-badge--connected';
         ui.connDot.className = 'status-dot status-dot--active';
+        ui.btnRecord.disabled = false;
     } else if (status === 'connecting') {
         ui.connStatus.textContent = 'Connecting...';
         ui.connStatus.className = 'connection-badge';
         ui.connDot.className = 'status-dot';
+        ui.btnRecord.disabled = true;
     } else {
         ui.connStatus.textContent = 'Disconnected';
         ui.connStatus.className = 'connection-badge connection-badge--disconnected';
         ui.connDot.className = 'status-dot';
         ui.streamerCount.textContent = '0';
         ui.listenerCount.textContent = '0';
+        ui.btnRecord.disabled = true;
     }
 }
 
@@ -448,9 +452,21 @@ async function fetchRecordings() {
         const res = await fetch(`${API_BASE}/recordings`);
         const data = await res.json();
         renderRecordings(data.recordings || []);
+        if (data.storage && ui.storageInfo) {
+            ui.storageInfo.innerHTML = `💾 Recordings: <strong>${data.storage.recordings_human}</strong> | Free Disk: <strong>${data.storage.free_human}</strong>`;
+        }
     } catch (e) {
         console.error('Failed to fetch recordings:', e);
     }
+}
+
+function formatRecordingTitle(rec) {
+    try {
+        if (rec.created_at) {
+            return `Recording — ${rec.created_at}`;
+        }
+    } catch (e) {}
+    return rec.filename;
 }
 
 function renderRecordings(recordings) {
@@ -465,17 +481,21 @@ function renderRecordings(recordings) {
         const li = document.createElement('li');
         li.className = 'recording-item';
         
+        const title = formatRecordingTitle(rec);
+        const downloadUrl = `${API_BASE}/recordings/${rec.filename}/download`;
+        
         li.innerHTML = `
-            <div class="recording-item__icon">🎵</div>
+            <div class="recording-item__icon">🎙️</div>
             <div class="recording-item__info">
-                <div class="recording-item__name" title="${rec.filename}">${rec.filename}</div>
-                <div class="recording-item__meta">${rec.duration_human} • ${rec.size_human} • ${rec.created_at}</div>
+                <div class="recording-item__name">${title}</div>
+                <div class="recording-item__meta">⏱️ ${rec.duration_human} • 📁 ${rec.size_human} • 📅 ${rec.created_at}</div>
+                <audio controls src="${downloadUrl}" preload="none" style="margin-top: 8px; width: 100%; height: 36px; border-radius: 6px;"></audio>
             </div>
-            <div class="recording-item__actions">
-                <a href="${API_BASE}/recordings/${rec.filename}/download" class="btn btn--icon" title="Download WAV" download="${rec.filename}">
+            <div class="recording-item__actions" style="margin-left: 12px; display: flex; gap: 6px; align-items: center;">
+                <a href="${downloadUrl}" class="btn btn--icon" title="Download WAV" download="${rec.filename}">
                     ⬇️
                 </a>
-                <button class="btn btn--danger btn--icon" title="Delete" onclick="deleteRecording('${rec.filename}')">
+                <button class="btn btn--danger btn--icon" title="Delete Recording" onclick="window.deleteRecording('${rec.filename}')">
                     🗑️
                 </button>
             </div>
@@ -485,13 +505,14 @@ function renderRecordings(recordings) {
     });
 }
 
-async function deleteRecording(filename) {
-    if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+// Global window attached function for delete button
+window.deleteRecording = async function(filename) {
+    if (!confirm(`Are you sure you want to delete this recording?\n${filename}`)) return;
     
     try {
         const res = await fetch(`${API_BASE}/recordings/${filename}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Recording deleted', 'success');
+            showToast('Recording deleted successfully', 'success');
             fetchRecordings();
         } else {
             showToast('Failed to delete recording', 'error');
@@ -499,7 +520,7 @@ async function deleteRecording(filename) {
     } catch (e) {
         showToast('Network error', 'error');
     }
-}
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 // HELPERS
