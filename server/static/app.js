@@ -304,16 +304,19 @@ function updateConnectionStatus(status) {
         ui.connStatus.textContent = 'Connected';
         ui.connStatus.className = 'connection-badge connection-badge--connected';
         ui.connDot.className = 'status-dot status-dot--active';
+        ui.btnRecord.disabled = false;
     } else if (status === 'connecting') {
         ui.connStatus.textContent = 'Connecting...';
         ui.connStatus.className = 'connection-badge';
         ui.connDot.className = 'status-dot';
+        ui.btnRecord.disabled = true;
     } else {
         ui.connStatus.textContent = 'Disconnected';
         ui.connStatus.className = 'connection-badge connection-badge--disconnected';
         ui.connDot.className = 'status-dot';
         ui.streamerCount.textContent = '0';
         ui.listenerCount.textContent = '0';
+        ui.btnRecord.disabled = true;
     }
 }
 
