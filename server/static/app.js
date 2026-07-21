@@ -26,7 +26,8 @@ const state = {
     recording: false,
     recordingDuration: 0,
     streamers: 0,
-    listeners: 0
+    listeners: 0,
+    muted: false
 };
 
 // ── UI Elements ──
@@ -39,6 +40,7 @@ const ui = {
     
     // Controls
     btnConnect: document.getElementById('btn-connect'),
+    btnMute: document.getElementById('btn-mute'),
     btnRecord: document.getElementById('btn-record'),
     
     // Timers & Volume
@@ -76,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Bind button events
     ui.btnConnect.addEventListener('click', toggleConnection);
+    ui.btnMute.addEventListener('click', toggleMute);
     ui.btnRecord.addEventListener('click', toggleRecording);
     
     // Fetch initial recordings list
@@ -170,8 +173,8 @@ async function connectWebSocket() {
                 float32Array[i] = int16Array[i] / 32768.0; 
             }
             
-            // 1. Send to AudioWorklet for live playback
-            if (workletNode) {
+            // 1. Send to AudioWorklet for live playback (ONLY if NOT muted)
+            if (workletNode && !state.muted) {
                 if (audioCtx.state === 'suspended') {
                     audioCtx.resume();
                 }
@@ -181,10 +184,31 @@ async function connectWebSocket() {
                 });
             }
             
-            // 2. Send to Waveform canvas for visualization
+            // 2. Send to Waveform canvas for visualization (ALWAYS active!)
             waveform.pushSamples(float32Array);
         }
     };
+}
+
+/**
+ * Toggle live audio speaker playback on or off without affecting recording or visualization.
+ */
+function toggleMute() {
+    state.muted = !state.muted;
+    
+    if (state.muted) {
+        ui.btnMute.innerHTML = '🔇 Live Sound: OFF';
+        ui.btnMute.style.opacity = '0.7';
+        showToast('Live audio playback muted (Recording still active)', 'info');
+    } else {
+        ui.btnMute.innerHTML = '🔊 Live Sound: ON';
+        ui.btnMute.style.opacity = '1.0';
+        showToast('Live audio playback unmuted', 'success');
+        
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+    }
 }
 
 /**

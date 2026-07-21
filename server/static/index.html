@@ -43,9 +43,12 @@
         <section class="card">
             <header class="card__header">
                 <h2 class="card__title">Live Signal</h2>
-                <div class="controls">
+                <div class="controls" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                     <button id="btn-connect" class="btn btn--primary">
                         Connect
+                    </button>
+                    <button id="btn-mute" class="btn btn--secondary" title="Mute or Unmute live audio playback">
+                        🔊 Live Sound: ON
                     </button>
                     <button id="btn-record" class="btn btn--primary" disabled>
                         Record Audio
