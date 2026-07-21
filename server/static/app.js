@@ -456,6 +456,15 @@ async function fetchRecordings() {
     }
 }
 
+function formatRecordingTitle(rec) {
+    try {
+        if (rec.created_at) {
+            return `Recording — ${rec.created_at}`;
+        }
+    } catch (e) {}
+    return rec.filename;
+}
+
 function renderRecordings(recordings) {
     ui.recordingsList.innerHTML = '';
     
@@ -468,17 +477,21 @@ function renderRecordings(recordings) {
         const li = document.createElement('li');
         li.className = 'recording-item';
         
+        const title = formatRecordingTitle(rec);
+        const downloadUrl = `${API_BASE}/recordings/${rec.filename}/download`;
+        
         li.innerHTML = `
-            <div class="recording-item__icon">🎵</div>
+            <div class="recording-item__icon">🎙️</div>
             <div class="recording-item__info">
-                <div class="recording-item__name" title="${rec.filename}">${rec.filename}</div>
-                <div class="recording-item__meta">${rec.duration_human} • ${rec.size_human} • ${rec.created_at}</div>
+                <div class="recording-item__name">${title}</div>
+                <div class="recording-item__meta">⏱️ ${rec.duration_human} • 📁 ${rec.size_human} • 📅 ${rec.created_at}</div>
+                <audio controls src="${downloadUrl}" preload="none" style="margin-top: 8px; width: 100%; height: 36px; border-radius: 6px;"></audio>
             </div>
-            <div class="recording-item__actions">
-                <a href="${API_BASE}/recordings/${rec.filename}/download" class="btn btn--icon" title="Download WAV" download="${rec.filename}">
+            <div class="recording-item__actions" style="margin-left: 12px; display: flex; gap: 6px; align-items: center;">
+                <a href="${downloadUrl}" class="btn btn--icon" title="Download WAV" download="${rec.filename}">
                     ⬇️
                 </a>
-                <button class="btn btn--danger btn--icon" title="Delete" onclick="deleteRecording('${rec.filename}')">
+                <button class="btn btn--danger btn--icon" title="Delete Recording" onclick="window.deleteRecording('${rec.filename}')">
                     🗑️
                 </button>
             </div>
@@ -488,13 +501,14 @@ function renderRecordings(recordings) {
     });
 }
 
-async function deleteRecording(filename) {
-    if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+// Global window attached function for delete button
+window.deleteRecording = async function(filename) {
+    if (!confirm(`Are you sure you want to delete this recording?\n${filename}`)) return;
     
     try {
         const res = await fetch(`${API_BASE}/recordings/${filename}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Recording deleted', 'success');
+            showToast('Recording deleted successfully', 'success');
             fetchRecordings();
         } else {
             showToast('Failed to delete recording', 'error');
@@ -502,7 +516,7 @@ async function deleteRecording(filename) {
     } catch (e) {
         showToast('Network error', 'error');
     }
-}
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 // HELPERS
