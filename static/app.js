@@ -26,7 +26,9 @@ const state = {
     recording: false,
     recordingDuration: 0,
     streamers: 0,
-    listeners: 0
+    listeners: 0,
+    muted: false,
+    gain: 1.0
 };
 
 // ── UI Elements ──
@@ -39,7 +41,10 @@ const ui = {
     
     // Controls
     btnConnect: document.getElementById('btn-connect'),
+    btnMute: document.getElementById('btn-mute'),
     btnRecord: document.getElementById('btn-record'),
+    gainSlider: document.getElementById('gain-slider'),
+    gainVal: document.getElementById('gain-val'),
     
     // Timers & Volume
     recordTimer: document.getElementById('record-timer'),
@@ -74,9 +79,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start volume bar animation loop
     requestAnimationFrame(updateVolumeBar);
     
-    // Bind button events
+    // Bind button & slider events
     ui.btnConnect.addEventListener('click', toggleConnection);
+    ui.btnMute.addEventListener('click', toggleMute);
     ui.btnRecord.addEventListener('click', toggleRecording);
+    
+    if (ui.gainSlider) {
+        ui.gainSlider.addEventListener('input', (e) => {
+            state.gain = parseFloat(e.target.value);
+            if (ui.gainVal) ui.gainVal.textContent = `${state.gain.toFixed(1)}x`;
+        });
+    }
     
     // Fetch initial recordings list
     fetchRecordings();
@@ -166,22 +179,50 @@ async function connectWebSocket() {
             // Convert to Float32 [-1.0, 1.0] for the Web Audio API
             const float32Array = new Float32Array(int16Array.length);
             for (let i = 0; i < int16Array.length; i++) {
-                // Normalize 16-bit signed integer to float
-                float32Array[i] = int16Array[i] / 32768.0; 
+                // Normalize 16-bit signed integer to float and apply Gain multiplier
+                let sample = (int16Array[i] / 32768.0) * state.gain;
+                // Soft/Hard clamp to prevent digital distortion
+                if (sample > 1.0) sample = 1.0;
+                if (sample < -1.0) sample = -1.0;
+                float32Array[i] = sample;
             }
             
-            // 1. Send to AudioWorklet for playback
-            if (workletNode && audioCtx.state === 'running') {
+            // 1. Send to AudioWorklet for live playback (ONLY if NOT muted)
+            if (workletNode && !state.muted) {
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
                 workletNode.port.postMessage({
                     type: 'pcm',
                     samples: float32Array
                 });
             }
             
-            // 2. Send to Waveform canvas for visualization
+            // 2. Send to Waveform canvas for visualization (ALWAYS active!)
             waveform.pushSamples(float32Array);
         }
     };
+}
+
+/**
+ * Toggle live audio speaker playback on or off without affecting recording or visualization.
+ */
+function toggleMute() {
+    state.muted = !state.muted;
+    
+    if (state.muted) {
+        ui.btnMute.innerHTML = '🔇 Live Sound: OFF';
+        ui.btnMute.style.opacity = '0.7';
+        showToast('Live audio playback muted (Recording still active)', 'info');
+    } else {
+        ui.btnMute.innerHTML = '🔊 Live Sound: ON';
+        ui.btnMute.style.opacity = '1.0';
+        showToast('Live audio playback unmuted', 'success');
+        
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+    }
 }
 
 /**

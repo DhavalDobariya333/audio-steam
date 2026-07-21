@@ -43,10 +43,18 @@
         <section class="card">
             <header class="card__header">
                 <h2 class="card__title">Live Signal</h2>
-                <div class="controls">
+                <div class="controls" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <button id="btn-connect" class="btn btn--primary">
                         Connect
                     </button>
+                    <button id="btn-mute" class="btn btn--secondary" title="Mute or Unmute live audio playback">
+                        🔊 Live Sound: ON
+                    </button>
+                    <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem;">
+                        <span>🎚️ Gain:</span>
+                        <input type="range" id="gain-slider" min="1" max="5" step="0.5" value="1" style="width: 75px; cursor: pointer;">
+                        <span id="gain-val" style="font-weight: 600; color: #4CAF50; min-width: 32px;">1.0x</span>
+                    </div>
                     <button id="btn-record" class="btn btn--primary" disabled>
                         Record Audio
                     </button>
