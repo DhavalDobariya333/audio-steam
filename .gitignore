@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Recordings directory
+recordings/
+*.wav
+
+# Android build artifacts & downloaded tools
+android-client/.gradle/
+android-client/.tools/
+android-client/build/
+android-client/app/build/
+android-client/.idea/
+android-client/local.properties
+*.apk
+*.zip
+
+# OS / Editor generated files
+.DS_Store
+Thumbs.db
+*.log

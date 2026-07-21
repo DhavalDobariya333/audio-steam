@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Stream Dashboard</title>
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Favicon (Emoji) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+</head>
+<body>
+
+    <div class="app">
+        
+        <!-- Header -->
+        <header class="header">
+            <h1 class="header__title">Live Audio Monitor</h1>
+            <p class="header__subtitle">Android Termux Streaming Architecture</p>
+        </header>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item" title="Connection to Server">
+                <div id="conn-dot" class="status-dot"></div>
+                <span id="conn-status" class="connection-badge connection-badge--disconnected">Disconnected</span>
+            </div>
+            
+            <div class="status-item" title="Active Audio Senders (Android Apps)">
+                <span>🎙️ Streamers:</span>
+                <span id="streamer-count" class="status-value">0</span>
+            </div>
+            
+            <div class="status-item" title="Active Dashboard Viewers">
+                <span>👂 Listeners:</span>
+                <span id="listener-count" class="status-value">0</span>
+            </div>
+        </div>
+
+        <!-- Live Visualizer Card -->
+        <section class="card">
+            <header class="card__header">
+                <h2 class="card__title">Live Signal</h2>
+                <div class="controls">
+                    <button id="btn-connect" class="btn btn--primary">
+                        Connect
+                    </button>
+                    <button id="btn-record" class="btn btn--primary" disabled>
+                        Record Audio
+                    </button>
+                </div>
+            </header>
+            
+            <!-- Waveform Canvas -->
+            <div class="waveform-container">
+                <canvas id="waveform-canvas"></canvas>
+                <!-- Overlay shown when no stream is active -->
+                <div id="waveform-overlay" class="waveform-overlay">
+                    Waiting for audio stream...
+                </div>
+            </div>
+            
+            <!-- Real-time Volume Bar -->
+            <div class="volume-bar">
+                <div id="volume-fill" class="volume-bar__fill"></div>
+            </div>
+            
+            <!-- Active Recording Indicator -->
+            <div id="record-timer" class="recording-timer">
+                <div class="recording-timer__dot"></div>
+                <div class="recording-timer__text">Recording in progress</div>
+                <div id="record-time" class="recording-timer__time">00:00</div>
+            </div>
+        </section>
+
+        <!-- Saved Recordings Card -->
+        <section class="card">
+            <header class="card__header">
+                <h2 class="card__title">Saved Recordings</h2>
+            </header>
+            
+            <ul id="recordings-list" class="recordings-list">
+                <!-- Dynamically populated via JS -->
+                <li class="recordings-list__empty">Loading recordings...</li>
+            </ul>
+        </section>
+
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="waveform.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
