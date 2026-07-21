@@ -13,11 +13,10 @@
  */
 
 // ── Configuration ──
-// Use the current host/port for API and WebSocket URLs
-const HOST = window.location.hostname;
-const PORT = window.location.port || '80';
+// Use current host and protocol for WebSocket URL
 const PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL = `${PROTOCOL}//${HOST}:${PORT}/ws/listen`;
+const PORT_PART = window.location.port ? `:${window.location.port}` : '';
+const WS_URL = `${PROTOCOL}//${window.location.hostname}${PORT_PART}/ws/listen`;
 const API_BASE = `/api`;
 
 // ── Application State ──
