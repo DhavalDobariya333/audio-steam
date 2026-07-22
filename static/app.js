@@ -1,562 +1,544 @@
 /**
- * app.js — Main Web Dashboard Application Logic.
+ * app.js — Audio Monitor Dashboard Application
  *
  * Handles:
- *   - WebSocket connection to the server (/ws/listen)
- *   - Web Audio API setup for raw PCM playback via AudioWorklet
- *   - UI state updates (status indicators, volume bar, timers)
- *   - Fetching and managing saved recordings via REST API
- *   - Toast notifications
+ *   - Auto-refreshing dashboard data via REST API polling
+ *   - Client status display (online/offline cards)
+ *   - Recordings browser with filtering, sorting, and search
+ *   - Auto-playback queue (plays new recordings sequentially)
+ *   - Activity feed showing recent uploads
+ *   - Toast notifications for important events
  *
- * Uses Vanilla JavaScript (no frameworks) for maximum performance
- * and minimal overhead on low-end devices.
+ * Architecture:
+ *   - Polls GET /api/dashboard every 3 seconds for all data
+ *   - Individual recording endpoints for download/delete
+ *   - No WebSocket needed — pure HTTP polling
  */
 
 // ── Configuration ──
-// Use current host and protocol for WebSocket URL
-const PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const PORT_PART = window.location.port ? `:${window.location.port}` : '';
-const WS_URL = `${PROTOCOL}//${window.location.hostname}${PORT_PART}/ws/listen`;
-const API_BASE = `/api`;
+const API = '/api';
+const POLL_INTERVAL = 3000;    // Dashboard refresh interval (ms)
 
 // ── Application State ──
 const state = {
-    connected: false,
-    streamActive: false,
-    recording: false,
-    recordingDuration: 0,
-    streamers: 0,
-    listeners: 0,
-    muted: false,
-    gain: 1.0
+    // Data
+    clients: [],
+    recordings: [],
+    recentUploads: [],
+    playbackQueue: [],
+    stats: {},
+    storage: {},
+
+    // Playback
+    autoPlayEnabled: false,
+    isPlaying: false,
+    currentTrack: null,
+    lastSeenUploadCount: 0,
+
+    // Filters
+    filterClient: '',
+    filterDate: '',
+    filterSearch: '',
+    filterSort: 'newest',
+
+    // Pagination
+    offset: 0,
+    limit: 30,
+    hasMore: false,
+
+    // Known recording UUIDs (to detect new arrivals)
+    knownUuids: new Set(),
+    initialized: false,
 };
 
-// ── UI Elements ──
-const ui = {
-    // Status badges
-    connStatus: document.getElementById('conn-status'),
-    connDot: document.getElementById('conn-dot'),
-    streamerCount: document.getElementById('streamer-count'),
-    listenerCount: document.getElementById('listener-count'),
-    
-    // Controls
-    btnConnect: document.getElementById('btn-connect'),
-    btnMute: document.getElementById('btn-mute'),
-    btnRecord: document.getElementById('btn-record'),
-    gainSlider: document.getElementById('gain-slider'),
-    gainVal: document.getElementById('gain-val'),
-    
-    // Timers & Volume
-    recordTimer: document.getElementById('record-timer'),
-    recordTime: document.getElementById('record-time'),
-    volumeFill: document.getElementById('volume-fill'),
-    waveformOverlay: document.getElementById('waveform-overlay'),
-    
-    // Recordings & Storage
-    recordingsList: document.getElementById('recordings-list'),
-    storageInfo: document.getElementById('storage-info'),
-    
-    // Notifications
-    toastContainer: document.getElementById('toast-container')
-};
-
-// ── Core Components ──
-let ws = null;
-let audioCtx = null;
-let workletNode = null;
-let waveform = null;
-let recordTimerInterval = null;
+// ── UI References ──
+const ui = {};
 
 // ════════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ════════════════════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize the canvas waveform renderer
-    waveform = new window.WaveformRenderer('waveform-canvas');
-    waveform.start();
-    
-    // Start volume bar animation loop
-    requestAnimationFrame(updateVolumeBar);
-    
-    // Bind button & slider events
-    ui.btnConnect.addEventListener('click', toggleConnection);
-    ui.btnMute.addEventListener('click', toggleMute);
-    ui.btnRecord.addEventListener('click', toggleRecording);
-    
-    if (ui.gainSlider) {
-        ui.gainSlider.addEventListener('input', (e) => {
-            state.gain = parseFloat(e.target.value);
-            if (ui.gainVal) ui.gainVal.textContent = `${state.gain.toFixed(1)}x`;
-        });
-    }
-    
-    // Fetch initial recordings list
+    // Cache all UI element references
+    cacheUI();
+
+    // Bind event handlers
+    bindEvents();
+
+    // Initial data fetch
+    fetchDashboard();
     fetchRecordings();
-    
-    // Auto-connect on load (optional, you can require manual click)
-    // For a surveillance app, auto-connect is usually preferred
-    connectWebSocket();
+
+    // Start polling loop
+    setInterval(fetchDashboard, POLL_INTERVAL);
+
+    // Start playback progress animation
+    requestAnimationFrame(updatePlaybackProgress);
 });
 
+function cacheUI() {
+    // Stats
+    ui.statOnline = document.getElementById('stat-online');
+    ui.statRecordings = document.getElementById('stat-recordings');
+    ui.statDuration = document.getElementById('stat-duration');
+    ui.statStorage = document.getElementById('stat-storage');
+    ui.statFree = document.getElementById('stat-free');
+    ui.statUploadsHour = document.getElementById('stat-uploads-hour');
+
+    // Clients
+    ui.clientsGrid = document.getElementById('clients-grid');
+    ui.clientCountBadge = document.getElementById('client-count-badge');
+
+    // Playback
+    ui.btnAutoplay = document.getElementById('btn-autoplay');
+    ui.btnSkip = document.getElementById('btn-skip');
+    ui.queueCountBadge = document.getElementById('queue-count-badge');
+    ui.nowPlayingTitle = document.getElementById('now-playing-title');
+    ui.audioPlayer = document.getElementById('audio-player');
+    ui.playbackProgress = document.getElementById('playback-progress');
+    ui.playbackTime = document.getElementById('playback-time');
+
+    // Activity
+    ui.activityFeed = document.getElementById('activity-feed');
+
+    // Recordings
+    ui.recordingsList = document.getElementById('recordings-list');
+    ui.storageInfo = document.getElementById('storage-info');
+    ui.exportMinutes = document.getElementById('export-minutes');
+    ui.btnExportCombined = document.getElementById('btn-export-combined');
+    ui.filterClient = document.getElementById('filter-client');
+    ui.filterDate = document.getElementById('filter-date');
+    ui.filterSearch = document.getElementById('filter-search');
+    ui.filterSort = document.getElementById('filter-sort');
+    ui.loadMore = document.getElementById('load-more');
+    ui.btnLoadMore = document.getElementById('btn-load-more');
+
+    // Toast
+    ui.toastContainer = document.getElementById('toast-container');
+}
+
+function bindEvents() {
+    // Auto-play toggle
+    ui.btnAutoplay.addEventListener('click', toggleAutoPlay);
+    ui.btnSkip.addEventListener('click', skipTrack);
+
+    // Audio player events
+    ui.audioPlayer.addEventListener('ended', onTrackEnded);
+    ui.audioPlayer.addEventListener('error', onTrackError);
+
+    // Filters & Export
+    ui.filterClient.addEventListener('change', onFilterChange);
+    ui.filterDate.addEventListener('change', onFilterChange);
+    ui.filterSearch.addEventListener('input', debounce(onFilterChange, 400));
+    ui.filterSort.addEventListener('change', onFilterChange);
+    if (ui.btnExportCombined) {
+        ui.btnExportCombined.addEventListener('click', exportCombinedAudio);
+    }
+
+    // Load more
+    ui.btnLoadMore.addEventListener('click', loadMore);
+}
+
+function exportCombinedAudio() {
+    const params = new URLSearchParams();
+    if (state.filterClient) params.set('client', state.filterClient);
+    if (state.filterDate) params.set('date', state.filterDate);
+    const minutes = ui.exportMinutes ? parseInt(ui.exportMinutes.value) : 5;
+    params.set('minutes', minutes);
+
+    const url = `${API}/recordings/export-combined?${params.toString()}`;
+    const label = minutes === 0 ? 'all available audio' : `${minutes}-minute combined audio`;
+    showToast(`Merging ${label} & starting download...`, 'info');
+
+    const a = document.createElement('a');
+    a.href = url;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
 // ════════════════════════════════════════════════════════════════════════════
-// WEBSOCKET & AUDIO PIPELINE
+// DATA FETCHING
 // ════════════════════════════════════════════════════════════════════════════
 
-/**
- * Connect to the server WebSocket and set up the audio pipeline.
- */
-async function connectWebSocket() {
-    if (ws && ws.readyState === WebSocket.OPEN) return;
-    
-    // 1. Initialize Web Audio API (must be done after a user gesture in some browsers)
+async function fetchDashboard() {
     try {
-        await initAudio();
-    } catch (e) {
-        showToast('Microphone/Audio permission required for playback', 'error');
-        console.error('Audio init failed:', e);
-        return;
-    }
-    
-    updateConnectionStatus('connecting');
-    
-    // 2. Connect WebSocket
-    ws = new WebSocket(WS_URL);
-    
-    ws.onopen = () => {
-        state.connected = true;
-        updateConnectionStatus('connected');
-        showToast('Connected to server', 'success');
-        
-        // Change connect button to disconnect
-        ui.btnConnect.innerHTML = 'Disconnect';
-        ui.btnConnect.classList.replace('btn--primary', 'btn--danger');
-    };
-    
-    ws.onclose = () => {
-        state.connected = false;
-        state.streamActive = false;
-        updateConnectionStatus('disconnected');
-        updateStreamStatus();
-        
-        ui.btnConnect.innerHTML = 'Connect';
-        ui.btnConnect.classList.replace('btn--danger', 'btn--primary');
-        
-        // Stop audio playback if active
-        if (audioCtx && audioCtx.state === 'running') {
-            audioCtx.suspend();
-        }
-        
-        // Clear waveform
-        waveform.clear();
-        ui.waveformOverlay.classList.remove('waveform-overlay--hidden');
-    };
-    
-    ws.onerror = (err) => {
-        console.error('WebSocket Error:', err);
-        showToast('Connection error', 'error');
-    };
-    
-    ws.onmessage = async (event) => {
-        // ── Handle JSON Status Messages ──
-        if (typeof event.data === 'string') {
-            try {
-                const msg = JSON.parse(event.data);
-                handleServerMessage(msg);
-            } catch (e) {
-                console.error('Error parsing WS message:', e);
-            }
-            return;
-        }
-        
-        // ── Handle Binary Audio Messages (Raw PCM) ──
-        if (event.data instanceof Blob) {
-            // Read the binary PCM data
-            const arrayBuffer = await event.data.arrayBuffer();
-            // Convert to 16-bit integers
-            const int16Array = new Int16Array(arrayBuffer);
-            
-            // Convert to Float32 [-1.0, 1.0] for the Web Audio API
-            const float32Array = new Float32Array(int16Array.length);
-            for (let i = 0; i < int16Array.length; i++) {
-                // Normalize 16-bit signed integer to float and apply Gain multiplier
-                let sample = (int16Array[i] / 32768.0) * state.gain;
-                // Soft/Hard clamp to prevent digital distortion
-                if (sample > 1.0) sample = 1.0;
-                if (sample < -1.0) sample = -1.0;
-                float32Array[i] = sample;
-            }
-            
-            // 1. Send to AudioWorklet for live playback (ONLY if NOT muted)
-            if (workletNode && !state.muted) {
-                if (audioCtx.state === 'suspended') {
-                    audioCtx.resume();
-                }
-                workletNode.port.postMessage({
-                    type: 'pcm',
-                    samples: float32Array
-                });
-            }
-            
-            // 2. Send to Waveform canvas for visualization (ALWAYS active!)
-            waveform.pushSamples(float32Array);
-        }
-    };
-}
-
-/**
- * Toggle live audio speaker playback on or off without affecting recording or visualization.
- */
-function toggleMute() {
-    state.muted = !state.muted;
-    
-    if (state.muted) {
-        ui.btnMute.innerHTML = '🔇 Live Sound: OFF';
-        ui.btnMute.style.opacity = '0.7';
-        showToast('Live audio playback muted (Recording still active)', 'info');
-    } else {
-        ui.btnMute.innerHTML = '🔊 Live Sound: ON';
-        ui.btnMute.style.opacity = '1.0';
-        showToast('Live audio playback unmuted', 'success');
-        
-        if (audioCtx && audioCtx.state === 'suspended') {
-            audioCtx.resume();
-        }
-    }
-}
-
-/**
- * Disconnect from the server and stop audio.
- */
-function disconnectWebSocket() {
-    if (ws) {
-        ws.close();
-        ws = null;
-    }
-}
-
-function toggleConnection() {
-    if (state.connected) {
-        disconnectWebSocket();
-    } else {
-        connectWebSocket();
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// WEB AUDIO API
-// ════════════════════════════════════════════════════════════════════════════
-
-/**
- * Initialize the Web Audio API context and load our custom PCM processor.
- */
-async function initAudio() {
-    if (audioCtx) {
-        // If already initialized, just resume (browsers pause it if no user interaction)
-        if (audioCtx.state === 'suspended') {
-            await audioCtx.resume();
-        }
-        return;
-    }
-    
-    // Create audio context at 16kHz (must match our incoming stream)
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new AudioContext({ sampleRate: 16000 });
-    
-    try {
-        // Load the AudioWorklet processor module
-        await audioCtx.audioWorklet.addModule('/pcm-worker.js');
-        
-        // Create the node
-        workletNode = new AudioWorkletNode(audioCtx, 'pcm-player-processor');
-        
-        // Connect the node to the speakers
-        workletNode.connect(audioCtx.destination);
-        
-        // Listen for messages from the processor (e.g., underrun warnings)
-        workletNode.port.onmessage = (event) => {
-            if (event.data.type === 'status' && event.data.underrun) {
-                // The ring buffer is empty (network lag)
-                // console.warn('Audio underrun (buffer empty)');
-            }
-        };
-        
-        console.log('Audio pipeline initialized at 16kHz');
-    } catch (e) {
-        console.error('Failed to load AudioWorklet:', e);
-        throw e;
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MESSAGE HANDLING
-// ════════════════════════════════════════════════════════════════════════════
-
-/**
- * Handle JSON status updates from the server.
- */
-function handleServerMessage(msg) {
-    switch (msg.type) {
-        case 'init':
-            // Initial state dump on connection
-            state.streamActive = msg.stream_active;
-            state.streamers = msg.streamers;
-            state.listeners = msg.listeners;
-            state.recording = msg.recording;
-            state.recordingDuration = msg.recording_duration;
-            
-            updateStreamStatus();
-            updateRecordingUI();
-            break;
-            
-        case 'stream_status':
-            // Streamer connected or disconnected
-            state.streamActive = msg.active;
-            state.streamers = msg.streamers;
-            if (msg.listeners !== undefined) state.listeners = msg.listeners;
-            
-            updateStreamStatus();
-            if (msg.active) {
-                showToast('Incoming audio stream started', 'info');
-            } else {
-                showToast('Audio stream ended', 'info');
-            }
-            break;
-            
-        case 'recording_status':
-            // Server started/stopped recording
-            state.recording = msg.recording;
-            state.recordingDuration = msg.duration || 0;
-            updateRecordingUI();
-            
-            // If recording stopped, fetch the updated list
-            if (!msg.recording) {
-                fetchRecordings();
-            }
-            break;
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// UI UPDATES
-// ════════════════════════════════════════════════════════════════════════════
-
-function updateConnectionStatus(status) {
-    if (status === 'connected') {
-        ui.connStatus.textContent = 'Connected';
-        ui.connStatus.className = 'connection-badge connection-badge--connected';
-        ui.connDot.className = 'status-dot status-dot--active';
-        ui.btnRecord.disabled = false;
-    } else if (status === 'connecting') {
-        ui.connStatus.textContent = 'Connecting...';
-        ui.connStatus.className = 'connection-badge';
-        ui.connDot.className = 'status-dot';
-        ui.btnRecord.disabled = true;
-    } else {
-        ui.connStatus.textContent = 'Disconnected';
-        ui.connStatus.className = 'connection-badge connection-badge--disconnected';
-        ui.connDot.className = 'status-dot';
-        ui.streamerCount.textContent = '0';
-        ui.listenerCount.textContent = '0';
-        ui.btnRecord.disabled = true;
-    }
-}
-
-function updateStreamStatus() {
-    ui.streamerCount.textContent = state.streamers;
-    ui.listenerCount.textContent = state.listeners;
-    
-    if (state.streamActive) {
-        // Hide the "Waiting for stream..." overlay on the canvas
-        ui.waveformOverlay.classList.add('waveform-overlay--hidden');
-        
-        // Ensure audio context is running to play the stream
-        if (audioCtx && audioCtx.state === 'suspended') {
-            audioCtx.resume();
-        }
-    } else {
-        // Show overlay
-        ui.waveformOverlay.classList.remove('waveform-overlay--hidden');
-        
-        // Tell waveform to fade out to a flat line
-        if (waveform) waveform.clear();
-        
-        // Tell AudioWorklet to clear its buffer
-        if (workletNode) {
-            workletNode.port.postMessage({ type: 'clear' });
-        }
-    }
-}
-
-function updateVolumeBar() {
-    if (waveform && state.streamActive) {
-        // Get smoothed peak level (0.0 to 1.0)
-        const peak = waveform.getPeakLevel();
-        // Convert to percentage for the CSS width
-        ui.volumeFill.style.width = `${Math.min(100, peak * 100)}%`;
-    } else {
-        ui.volumeFill.style.width = '0%';
-    }
-    
-    // Loop animation
-    requestAnimationFrame(updateVolumeBar);
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// RECORDING CONTROL (REST API)
-// ════════════════════════════════════════════════════════════════════════════
-
-async function toggleRecording() {
-    // Prevent action if not connected
-    if (!state.connected) {
-        showToast('Must be connected to record', 'error');
-        return;
-    }
-
-    try {
-        // Disable button while request is in flight
-        ui.btnRecord.disabled = true;
-        
-        if (state.recording) {
-            // Stop recording
-            const res = await fetch(`${API_BASE}/recording/stop`, { method: 'POST' });
-            const data = await res.json();
-            
-            if (data.status === 'stopped') {
-                showToast(`Recording saved: ${data.recording.size_human}`, 'success');
-                // The WebSocket will also receive a recording_status broadcast,
-                // but we fetch recordings here just to be safe
-                fetchRecordings();
-            } else {
-                showToast(data.message || 'Error stopping recording', 'error');
-            }
-        } else {
-            // Start recording
-            const res = await fetch(`${API_BASE}/recording/start`, { method: 'POST' });
-            const data = await res.json();
-            
-            if (data.status === 'started') {
-                showToast('Recording started', 'success');
-            } else {
-                showToast(data.message || 'Error starting recording', 'error');
-            }
-        }
-    } catch (e) {
-        console.error('Recording API error:', e);
-        showToast('Network error', 'error');
-    } finally {
-        ui.btnRecord.disabled = false;
-    }
-}
-
-function updateRecordingUI() {
-    if (state.recording) {
-        // Update button to 'Stop'
-        ui.btnRecord.innerHTML = 'Stop Recording';
-        ui.btnRecord.classList.replace('btn--primary', 'btn--danger');
-        
-        // Show timer
-        ui.recordTimer.classList.add('recording-timer--active');
-        
-        // Start local timer loop if not already running
-        if (!recordTimerInterval) {
-            recordTimerInterval = setInterval(() => {
-                state.recordingDuration += 1;
-                ui.recordTime.textContent = formatDuration(state.recordingDuration);
-            }, 1000);
-        }
-        ui.recordTime.textContent = formatDuration(state.recordingDuration);
-        
-    } else {
-        // Update button to 'Record'
-        ui.btnRecord.innerHTML = 'Record Audio';
-        ui.btnRecord.classList.replace('btn--danger', 'btn--primary');
-        
-        // Hide timer
-        ui.recordTimer.classList.remove('recording-timer--active');
-        
-        // Clear local timer
-        if (recordTimerInterval) {
-            clearInterval(recordTimerInterval);
-            recordTimerInterval = null;
-        }
-        state.recordingDuration = 0;
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// SAVED RECORDINGS LIST
-// ════════════════════════════════════════════════════════════════════════════
-
-async function fetchRecordings() {
-    try {
-        const res = await fetch(`${API_BASE}/recordings`);
+        const res = await fetch(`${API}/dashboard`);
+        if (!res.ok) return;
         const data = await res.json();
-        renderRecordings(data.recordings || []);
-        if (data.storage && ui.storageInfo) {
-            ui.storageInfo.innerHTML = `💾 Recordings: <strong>${data.storage.recordings_human}</strong> | Free Disk: <strong>${data.storage.free_human}</strong>`;
+
+        // Update state
+        state.clients = data.clients || [];
+        state.recentUploads = data.recent_uploads || [];
+        state.stats = data.stats || {};
+        state.storage = data.storage || {};
+        state.playbackQueue = data.playback_queue || [];
+
+        // Detect new uploads
+        const newRecordings = (data.recent_recordings || []).filter(
+            r => !state.knownUuids.has(r.uuid)
+        );
+
+        if (state.initialized && newRecordings.length > 0) {
+            newRecordings.forEach(r => {
+                showToast(`📥 New: ${r.client_name} — ${r.duration_human}`, 'success');
+            });
+            // Refresh recordings list to show new ones
+            fetchRecordings();
         }
+
+        // Update known UUIDs
+        (data.recent_recordings || []).forEach(r => state.knownUuids.add(r.uuid));
+        state.initialized = true;
+
+        // Render UI
+        renderStats();
+        renderClients();
+        renderActivity();
+        updatePlaybackQueue();
+        updateClientFilter();
+
     } catch (e) {
-        console.error('Failed to fetch recordings:', e);
+        // Silent failure — dashboard just stays stale until next poll
+        console.error('Dashboard fetch error:', e);
     }
 }
 
-function formatRecordingTitle(rec) {
+async function fetchRecordings(append = false) {
     try {
-        if (rec.created_at) {
-            return `Recording — ${rec.created_at}`;
+        const params = new URLSearchParams();
+        if (state.filterClient) params.set('client', state.filterClient);
+        if (state.filterDate) params.set('date', state.filterDate);
+        if (state.filterSearch) params.set('search', state.filterSearch);
+        params.set('limit', state.limit);
+        params.set('offset', append ? state.offset : 0);
+
+        const res = await fetch(`${API}/recordings?${params}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (append) {
+            state.recordings = state.recordings.concat(data.recordings || []);
+        } else {
+            state.recordings = data.recordings || [];
+            state.offset = 0;
         }
-    } catch (e) {}
-    return rec.filename;
+
+        state.hasMore = (data.recordings || []).length >= state.limit;
+        state.offset = state.recordings.length;
+
+        // Apply client-side sorting
+        sortRecordings();
+
+        renderRecordings();
+        renderStorageInfo(data.storage || state.storage);
+
+    } catch (e) {
+        console.error('Recordings fetch error:', e);
+    }
 }
 
-function renderRecordings(recordings) {
-    ui.recordingsList.innerHTML = '';
-    
-    if (recordings.length === 0) {
-        ui.recordingsList.innerHTML = '<li class="recordings-list__empty">No saved recordings found.</li>';
+// ════════════════════════════════════════════════════════════════════════════
+// RENDERING
+// ════════════════════════════════════════════════════════════════════════════
+
+function renderStats() {
+    const s = state.stats;
+    ui.statOnline.textContent = s.clients_online || 0;
+    ui.statRecordings.textContent = s.total_recordings || 0;
+    ui.statDuration.textContent = s.total_duration_human || '00:00';
+    ui.statStorage.textContent = s.total_size_human || '0 B';
+    ui.statUploadsHour.textContent = s.uploads_last_hour || 0;
+
+    const st = state.storage;
+    ui.statFree.textContent = st.free_human || '—';
+}
+
+function renderClients() {
+    const clients = state.clients;
+    ui.clientCountBadge.textContent = `${clients.length} client${clients.length !== 1 ? 's' : ''}`;
+
+    if (clients.length === 0) {
+        ui.clientsGrid.innerHTML = '<div class="empty-state">No clients connected yet</div>';
         return;
     }
-    
-    recordings.forEach(rec => {
-        const li = document.createElement('li');
-        li.className = 'recording-item';
-        
-        const title = formatRecordingTitle(rec);
-        const downloadUrl = `${API_BASE}/recordings/${rec.filename}/download`;
-        
-        li.innerHTML = `
-            <div class="recording-item__icon">🎙️</div>
-            <div class="recording-item__info">
-                <div class="recording-item__name">${title}</div>
-                <div class="recording-item__meta">⏱️ ${rec.duration_human} • 📁 ${rec.size_human} • 📅 ${rec.created_at}</div>
-                <audio controls src="${downloadUrl}" preload="none" style="margin-top: 8px; width: 100%; height: 36px; border-radius: 6px;"></audio>
-            </div>
-            <div class="recording-item__actions" style="margin-left: 12px; display: flex; gap: 6px; align-items: center;">
-                <a href="${downloadUrl}" class="btn btn--icon" title="Download WAV" download="${rec.filename}">
-                    ⬇️
-                </a>
-                <button class="btn btn--danger btn--icon" title="Delete Recording" onclick="window.deleteRecording('${rec.filename}')">
-                    🗑️
-                </button>
+
+    ui.clientsGrid.innerHTML = clients.map(c => {
+        const isOnline = c.is_online === 1;
+        const statusClass = isOnline ? 'online' : 'offline';
+        const uploads = c.total_uploads || 0;
+        const lastSeen = c.last_seen || 'Never';
+
+        return `
+            <div class="client-card client-card--${statusClass}">
+                <div class="client-card__dot client-card__dot--${statusClass}"></div>
+                <div class="client-card__info">
+                    <div class="client-card__name">${esc(c.name)}</div>
+                    <div class="client-card__meta">Last: ${lastSeen}</div>
+                </div>
+                <div class="client-card__stats">
+                    ${uploads} uploads
+                </div>
             </div>
         `;
-        
-        ui.recordingsList.appendChild(li);
+    }).join('');
+}
+
+function renderActivity() {
+    const uploads = state.recentUploads;
+    if (uploads.length === 0) {
+        ui.activityFeed.innerHTML = '<div class="empty-state">Waiting for uploads...</div>';
+        return;
+    }
+
+    ui.activityFeed.innerHTML = uploads.slice(0, 15).map(u => {
+        const icon = u.status === 'success' ? '✅' : '❌';
+        const cls = u.status === 'success' ? 'upload' : 'error';
+        const size = formatSize(u.file_size || 0);
+        const time = (u.timestamp || '').split(' ')[1] || '';
+
+        return `
+            <div class="activity-item activity-item--${cls}">
+                <span class="activity-item__icon">${icon}</span>
+                <span class="activity-item__text">
+                    <strong>${esc(u.client_name)}</strong> uploaded ${size}
+                </span>
+                <span class="activity-item__time">${time}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderRecordings() {
+    const recs = state.recordings;
+
+    if (recs.length === 0) {
+        ui.recordingsList.innerHTML = '<li class="empty-state">No recordings found.</li>';
+        ui.loadMore.style.display = 'none';
+        return;
+    }
+
+    ui.recordingsList.innerHTML = recs.map(r => {
+        const downloadUrl = `${API}/recordings/${r.uuid}/download`;
+        const phoneTime = r.recorded_at ? `📱 Recorded: ${r.recorded_at}` : `📅 ${r.uploaded_at || '—'}`;
+        const title = `${esc(r.client_name)} — ${r.recorded_at || r.uploaded_at || ''}`;
+        const isNew = !state.knownUuids.has(r.uuid);
+
+        return `
+            <li class="recording-item ${isNew ? 'recording-item--new' : ''}">
+                <div class="recording-item__icon">🎙️</div>
+                <div class="recording-item__info">
+                    <div class="recording-item__name">${title}</div>
+                    <div class="recording-item__meta">
+                        ⏱️ ${r.duration_human || '—'} · 📁 ${r.size_human || '—'} · ${phoneTime} (☁️ ${r.uploaded_at || ''})
+                    </div>
+                    <div class="recording-item__player">
+                        <audio controls src="${downloadUrl}" preload="none"></audio>
+                    </div>
+                </div>
+                <div class="recording-item__actions">
+                    <a href="${downloadUrl}" class="btn btn--icon btn--sm" title="Download" download="${esc(r.filename)}">⬇️</a>
+                    <button class="btn btn--danger btn--icon btn--sm" title="Delete"
+                            onclick="deleteRecording('${esc(r.uuid)}', '${esc(r.filename)}')">🗑️</button>
+                </div>
+            </li>
+        `;
+    }).join('');
+
+    // Show/hide load more
+    ui.loadMore.style.display = state.hasMore ? 'block' : 'none';
+}
+
+function renderStorageInfo(storage) {
+    if (!storage) return;
+    ui.storageInfo.innerHTML = `💾 <strong>${storage.recordings_human || '0 B'}</strong> used · ${storage.recording_files || 0} files · ${storage.free_human || '—'} free`;
+}
+
+function updateClientFilter() {
+    const current = ui.filterClient.value;
+    const clientNames = [...new Set(state.clients.map(c => c.name))].sort();
+
+    // Only update if the options have changed
+    const existingOptions = [...ui.filterClient.options].slice(1).map(o => o.value);
+    if (JSON.stringify(clientNames) === JSON.stringify(existingOptions)) return;
+
+    // Preserve selection
+    ui.filterClient.innerHTML = '<option value="">All Clients</option>';
+    clientNames.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        if (name === current) option.selected = true;
+        ui.filterClient.appendChild(option);
     });
 }
 
-// Global window attached function for delete button
-window.deleteRecording = async function(filename) {
-    if (!confirm(`Are you sure you want to delete this recording?\n${filename}`)) return;
-    
+// ════════════════════════════════════════════════════════════════════════════
+// AUTO-PLAYBACK SYSTEM
+// ════════════════════════════════════════════════════════════════════════════
+
+function toggleAutoPlay() {
+    state.autoPlayEnabled = !state.autoPlayEnabled;
+
+    if (state.autoPlayEnabled) {
+        ui.btnAutoplay.textContent = '⏸ Auto-Play: ON';
+        ui.btnAutoplay.classList.add('active');
+        ui.btnSkip.disabled = false;
+        showToast('Auto-play enabled — new recordings will play automatically', 'info');
+        playNextInQueue();
+    } else {
+        ui.btnAutoplay.textContent = '▶ Auto-Play: OFF';
+        ui.btnAutoplay.classList.remove('active');
+        ui.btnSkip.disabled = true;
+        ui.audioPlayer.pause();
+        state.isPlaying = false;
+        state.currentTrack = null;
+        ui.nowPlayingTitle.textContent = 'Nothing playing';
+    }
+}
+
+function updatePlaybackQueue() {
+    const queue = state.playbackQueue;
+    ui.queueCountBadge.textContent = `${queue.length} in queue`;
+
+    // If auto-play is on and nothing is playing, start
+    if (state.autoPlayEnabled && !state.isPlaying && queue.length > 0) {
+        playNextInQueue();
+    }
+}
+
+function playNextInQueue() {
+    if (!state.autoPlayEnabled) return;
+
+    const queue = state.playbackQueue;
+    if (queue.length === 0) {
+        state.isPlaying = false;
+        state.currentTrack = null;
+        ui.nowPlayingTitle.textContent = 'Queue empty — waiting for new recordings...';
+        return;
+    }
+
+    const track = queue[0];
+    state.currentTrack = track;
+    state.isPlaying = true;
+
+    const url = `${API}/recordings/${track.uuid}/download`;
+    ui.audioPlayer.src = url;
+    ui.audioPlayer.play().catch(e => {
+        console.error('Playback error:', e);
+        // Browser may block autoplay without user interaction
+        showToast('Click anywhere to enable audio playback', 'info');
+    });
+
+    ui.nowPlayingTitle.textContent = `${track.client_name} — ${track.uploaded_at || ''} (${track.duration_human || ''})`;
+
+    // Mark as played on server
+    markPlayed(track.uuid);
+}
+
+function skipTrack() {
+    if (state.currentTrack) {
+        ui.audioPlayer.pause();
+        onTrackEnded();
+    }
+}
+
+function onTrackEnded() {
+    state.isPlaying = false;
+    state.currentTrack = null;
+
+    // Remove from local queue
+    if (state.playbackQueue.length > 0) {
+        state.playbackQueue.shift();
+    }
+
+    ui.queueCountBadge.textContent = `${state.playbackQueue.length} in queue`;
+
+    // Play next
+    if (state.autoPlayEnabled) {
+        playNextInQueue();
+    }
+}
+
+function onTrackError() {
+    console.error('Audio playback error');
+    onTrackEnded();
+}
+
+function updatePlaybackProgress() {
+    if (state.isPlaying && ui.audioPlayer.duration) {
+        const pct = (ui.audioPlayer.currentTime / ui.audioPlayer.duration) * 100;
+        ui.playbackProgress.style.width = `${pct}%`;
+
+        const cur = formatTime(ui.audioPlayer.currentTime);
+        const dur = formatTime(ui.audioPlayer.duration);
+        ui.playbackTime.textContent = `${cur} / ${dur}`;
+    } else {
+        ui.playbackProgress.style.width = '0%';
+        ui.playbackTime.textContent = '0:00 / 0:00';
+    }
+    requestAnimationFrame(updatePlaybackProgress);
+}
+
+async function markPlayed(uuid) {
     try {
-        const res = await fetch(`${API_BASE}/recordings/${filename}`, { method: 'DELETE' });
+        const form = new FormData();
+        form.append('uuid', uuid);
+        await fetch(`${API}/playback/mark-played`, { method: 'POST', body: form });
+    } catch (e) {
+        // Non-critical — ignore
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FILTERS & SORTING
+// ════════════════════════════════════════════════════════════════════════════
+
+function onFilterChange() {
+    state.filterClient = ui.filterClient.value;
+    state.filterDate = ui.filterDate.value;
+    state.filterSearch = ui.filterSearch.value;
+    state.filterSort = ui.filterSort.value;
+    state.offset = 0;
+    fetchRecordings();
+}
+
+function sortRecordings() {
+    switch (state.filterSort) {
+        case 'oldest':
+            state.recordings.sort((a, b) => (a.uploaded_at || '').localeCompare(b.uploaded_at || ''));
+            break;
+        case 'largest':
+            state.recordings.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
+            break;
+        case 'longest':
+            state.recordings.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+            break;
+        case 'newest':
+        default:
+            state.recordings.sort((a, b) => (b.uploaded_at || '').localeCompare(a.uploaded_at || ''));
+            break;
+    }
+}
+
+function loadMore() {
+    fetchRecordings(true);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ACTIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+window.deleteRecording = async function(uuid, filename) {
+    if (!confirm(`Delete recording?\n${filename}`)) return;
+
+    try {
+        const res = await fetch(`${API}/recordings/${uuid}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Recording deleted successfully', 'success');
+            showToast('Recording deleted', 'success');
             fetchRecordings();
         } else {
-            showToast('Failed to delete recording', 'error');
+            showToast('Failed to delete', 'error');
         }
     } catch (e) {
         showToast('Network error', 'error');
@@ -567,35 +549,42 @@ window.deleteRecording = async function(filename) {
 // HELPERS
 // ════════════════════════════════════════════════════════════════════════════
 
-function formatDuration(seconds) {
-    const s = Math.max(0, Math.floor(seconds));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    
-    if (h > 0) {
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
-    }
-    return `${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+function formatTime(seconds) {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/**
- * Display a temporary toast notification.
- * @param {string} message - Text to display.
- * @param {string} type - 'success', 'error', 'info'.
- */
+function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function esc(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function debounce(fn, ms) {
+    let timer;
+    return function(...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), ms);
+    };
+}
+
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast toast--${type}`;
     toast.textContent = message;
-    
     ui.toastContainer.appendChild(toast);
-    
-    // Auto remove after 3 seconds
+
     setTimeout(() => {
         toast.classList.add('toast--exit');
-        toast.addEventListener('animationend', () => {
-            toast.remove();
-        });
-    }, 3000);
+        toast.addEventListener('animationend', () => toast.remove());
+    }, 3500);
 }

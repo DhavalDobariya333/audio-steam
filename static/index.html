@@ -3,108 +3,163 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Audio Stream Dashboard</title>
-    
+    <title>Audio Monitor — Dashboard</title>
+    <meta name="description" content="Real-time audio monitoring dashboard. View connected clients, uploaded recordings, and playback audio chunks.">
+
+    <!-- Google Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
     <!-- CSS -->
     <link rel="stylesheet" href="style.css">
-    
-    <!-- Favicon (Emoji) -->
+
+    <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
 </head>
 <body>
 
     <div class="app">
-        
+
         <!-- Header -->
         <header class="header">
-            <h1 class="header__title">Live Audio Monitor</h1>
-            <p class="header__subtitle">Android Termux Streaming Architecture</p>
+            <h1 class="header__title">Audio Monitor</h1>
+            <p class="header__subtitle">Bulletproof Audio Monitoring System</p>
         </header>
 
-        <!-- Status Bar -->
-        <div class="status-bar">
-            <div class="status-item" title="Connection to Server">
-                <div id="conn-dot" class="status-dot"></div>
-                <span id="conn-status" class="connection-badge connection-badge--disconnected">Disconnected</span>
+        <!-- Stats Bar -->
+        <div class="stats-bar" id="stats-bar">
+            <div class="stat-item">
+                <span class="stat-label">Clients Online</span>
+                <span class="stat-value" id="stat-online">0</span>
             </div>
-            
-            <div class="status-item" title="Active Audio Senders (Android Apps)">
-                <span>🎙️ Streamers:</span>
-                <span id="streamer-count" class="status-value">0</span>
+            <div class="stat-item">
+                <span class="stat-label">Total Recordings</span>
+                <span class="stat-value" id="stat-recordings">0</span>
             </div>
-            
-            <div class="status-item" title="Active Dashboard Viewers">
-                <span>👂 Listeners:</span>
-                <span id="listener-count" class="status-value">0</span>
+            <div class="stat-item">
+                <span class="stat-label">Total Duration</span>
+                <span class="stat-value" id="stat-duration">00:00</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Storage Used</span>
+                <span class="stat-value" id="stat-storage">0 B</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Disk Free</span>
+                <span class="stat-value" id="stat-free">—</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Uploads/Hour</span>
+                <span class="stat-value" id="stat-uploads-hour">0</span>
             </div>
         </div>
 
-        <!-- Live Visualizer Card -->
-        <section class="card">
+        <!-- Connected Clients -->
+        <section class="card" id="clients-section">
             <header class="card__header">
-                <h2 class="card__title">Live Signal</h2>
-                <div class="controls" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                    <button id="btn-connect" class="btn btn--primary">
-                        Connect
-                    </button>
-                    <button id="btn-mute" class="btn btn--secondary" title="Mute or Unmute live audio playback">
-                        🔊 Live Sound: ON
-                    </button>
-                    <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem;">
-                        <span>🎚️ Gain:</span>
-                        <input type="range" id="gain-slider" min="1" max="5" step="0.5" value="1" style="width: 75px; cursor: pointer;">
-                        <span id="gain-val" style="font-weight: 600; color: #4CAF50; min-width: 32px;">1.0x</span>
-                    </div>
-                    <button id="btn-record" class="btn btn--primary" disabled>
-                        Record Audio
-                    </button>
-                </div>
+                <h2 class="card__title">Connected Clients</h2>
+                <span class="badge" id="client-count-badge">0 clients</span>
             </header>
-            
-            <!-- Waveform Canvas -->
-            <div class="waveform-container">
-                <canvas id="waveform-canvas"></canvas>
-                <!-- Overlay shown when no stream is active -->
-                <div id="waveform-overlay" class="waveform-overlay">
-                    Waiting for audio stream...
-                </div>
-            </div>
-            
-            <!-- Real-time Volume Bar -->
-            <div class="volume-bar">
-                <div id="volume-fill" class="volume-bar__fill"></div>
-            </div>
-            
-            <!-- Active Recording Indicator -->
-            <div id="record-timer" class="recording-timer">
-                <div class="recording-timer__dot"></div>
-                <div class="recording-timer__text">Recording in progress</div>
-                <div id="record-time" class="recording-timer__time">00:00</div>
+            <div class="clients-grid" id="clients-grid">
+                <div class="empty-state">No clients connected yet</div>
             </div>
         </section>
 
-        <!-- Saved Recordings Card -->
-        <section class="card">
-            <header class="card__header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <h2 class="card__title">Saved Recordings</h2>
-                <div id="storage-info" class="connection-badge" style="font-size: 0.85rem; font-weight: 500;">
-                    💾 Recordings: 0 MB | Free Disk: Checking...
+        <!-- Auto Playback Panel -->
+        <section class="card" id="playback-section">
+            <header class="card__header">
+                <h2 class="card__title">Auto Playback</h2>
+                <div class="playback-controls">
+                    <button id="btn-autoplay" class="btn btn--primary btn--sm" title="Toggle auto-play of new recordings">
+                        ▶ Auto-Play: OFF
+                    </button>
+                    <button id="btn-skip" class="btn btn--secondary btn--sm" title="Skip to next recording" disabled>
+                        ⏭ Skip
+                    </button>
+                    <span class="badge" id="queue-count-badge">0 in queue</span>
                 </div>
             </header>
-            
+            <div class="playback-area">
+                <div class="now-playing" id="now-playing">
+                    <div class="now-playing__label">Now Playing</div>
+                    <div class="now-playing__title" id="now-playing-title">Nothing playing</div>
+                    <audio id="audio-player" preload="auto"></audio>
+                    <div class="now-playing__progress">
+                        <div class="progress-bar">
+                            <div class="progress-bar__fill" id="playback-progress"></div>
+                        </div>
+                        <span class="now-playing__time" id="playback-time">0:00 / 0:00</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Recent Activity Feed -->
+        <section class="card" id="activity-section">
+            <header class="card__header">
+                <h2 class="card__title">Recent Activity</h2>
+                <span class="badge badge--live" id="activity-live">● Live</span>
+            </header>
+            <div class="activity-feed" id="activity-feed">
+                <div class="empty-state">Waiting for uploads...</div>
+            </div>
+        </section>
+
+        <!-- Recordings Browser -->
+        <section class="card" id="recordings-section">
+            <header class="card__header">
+                <h2 class="card__title">Recordings</h2>
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <select id="export-minutes" class="filter-select" title="Select combined audio length" style="width: auto;">
+                        <option value="1">1 Min Combined</option>
+                        <option value="5" selected>5 Min Combined</option>
+                        <option value="15">15 Min Combined</option>
+                        <option value="30">30 Min Combined</option>
+                        <option value="0">All Available</option>
+                    </select>
+                    <button id="btn-export-combined" class="btn btn--primary btn--sm" title="Merge & download consecutive chunks into a single audio file">
+                        ⬇️ Download Merged WAV
+                    </button>
+                    <div class="storage-info" id="storage-info">
+                        💾 Loading...
+                    </div>
+                </div>
+            </header>
+
+            <!-- Filters -->
+            <div class="filters-bar" id="filters-bar">
+                <select id="filter-client" class="filter-select" title="Filter by client">
+                    <option value="">All Clients</option>
+                </select>
+                <input type="date" id="filter-date" class="filter-input" title="Filter by date">
+                <input type="text" id="filter-search" class="filter-input filter-input--search"
+                       placeholder="Search..." title="Search recordings">
+                <select id="filter-sort" class="filter-select" title="Sort order">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="largest">Largest First</option>
+                    <option value="longest">Longest First</option>
+                </select>
+            </div>
+
+            <!-- Recordings List -->
             <ul id="recordings-list" class="recordings-list">
-                <!-- Dynamically populated via JS -->
-                <li class="recordings-list__empty">Loading recordings...</li>
+                <li class="empty-state">Loading recordings...</li>
             </ul>
+
+            <!-- Load More -->
+            <div class="load-more" id="load-more" style="display:none;">
+                <button id="btn-load-more" class="btn btn--secondary">Load More</button>
+            </div>
         </section>
 
     </div>
 
-    <!-- Toast Notifications Container -->
+    <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
     <!-- Scripts -->
-    <script src="waveform.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -1,14 +1,14 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# requirements.txt — Python dependencies for the Audio Stream Server
+# requirements.txt — Python dependencies for the Audio Monitor Server
 # ──────────────────────────────────────────────────────────────────────────────
 # Install: pip install -r requirements.txt
 #
-# fastapi      — ASGI web framework (HTTP + WebSocket)
-# uvicorn      — ASGI server to run FastAPI
-# websockets   — WebSocket protocol implementation (used by uvicorn)
-#
-# NOTE: We pin major versions for stability on Termux but allow patch updates.
+# fastapi         — ASGI web framework (HTTP endpoints)
+# uvicorn         — ASGI server to run FastAPI
+# python-multipart — Required for file upload (multipart/form-data)
+# aiofiles        — Async file serving for static files & downloads
 # ──────────────────────────────────────────────────────────────────────────────
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.34,<1.0
-websockets>=14.0,<15.0
+python-multipart>=0.0.9
+aiofiles>=24.1
