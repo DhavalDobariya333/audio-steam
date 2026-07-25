@@ -44,13 +44,14 @@ router.get('/sessions', (req: Request, res: Response) => {
 
 router.get('/sessions/:session_id', (req: Request, res: Response) => {
     try {
-        const session = db.getSession(req.params.session_id);
+        const session_id = req.params.session_id as string;
+        const session = db.getSession(session_id);
         if (!session) {
             res.status(404).json({ status: 'not_found' });
             return;
         }
 
-        const chunks = db.getSessionChunks(req.params.session_id);
+        const chunks = db.getSessionChunks(session_id);
 
         res.json({
             session,
@@ -68,7 +69,7 @@ router.get('/sessions/:session_id', (req: Request, res: Response) => {
 
 router.delete('/sessions/:session_id', (req: Request, res: Response) => {
     try {
-        const { session_id } = req.params;
+        const session_id = req.params.session_id as string;
 
         const session = db.getSession(session_id);
         if (!session) {

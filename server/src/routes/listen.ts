@@ -84,7 +84,8 @@ router.get('/sessions', (req: Request, res: Response) => {
 
 router.get('/:session_id', (req: Request, res: Response) => {
     try {
-        const session = db.getSession(req.params.session_id);
+        const session_id = req.params.session_id as string;
+        const session = db.getSession(session_id);
         if (!session) {
             res.status(404).json({ status: 'not_found' });
             return;
