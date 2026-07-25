@@ -136,10 +136,8 @@ class AudioRecordService : Service() {
     // SERVICE LIFECYCLE
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun getBatteryInfo(): String {
-        return try {
-            val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val batteryStatus = registerReceiver(null, filter)
+    private var batteryReceiver: android.content.BroadcastReceiver? = null
+
     private fun registerBatteryListener() {
         val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         batteryReceiver = object : android.content.BroadcastReceiver() {
