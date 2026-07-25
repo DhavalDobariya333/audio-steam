@@ -53,6 +53,8 @@ class UploadManager(
     private val dao = ChunkDatabase.getInstance(context).chunkDao()
     private val isRunning = AtomicBoolean(false)
     private val currentRetryCount = AtomicInteger(0)
+    @Volatile
+    private var activeSessionId: String? = null
 
     private val uploadScope = CoroutineScope(
         Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, e ->
@@ -88,6 +90,7 @@ class UploadManager(
 
     fun stop() {
         isRunning.set(false)
+        activeSessionId = null
         onLog("Upload manager stopped")
         uploadScope.coroutineContext.cancelChildren()
     }
@@ -143,7 +146,8 @@ class UploadManager(
     // ══════════════════════════════════════════════════════════════════════
 
     private fun ensureSession(): String? {
-        if (activeSessionId != null) return activeSessionId
+        val current = activeSessionId
+        if (current != null) return current
         return try {
             val createUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts"
             val jsonBody = JSONObject().apply {
@@ -259,6 +263,11 @@ class UploadManager(
                         false
                     }
                 }
+            } else {
+                onLog("Upload failed: HTTP ${response.code}")
+                dao.markFailed(chunk.uuid)
+                updateStats()
+                false
             }
         } catch (e: Exception) {
             onLog("Upload error: ${e.message}")
