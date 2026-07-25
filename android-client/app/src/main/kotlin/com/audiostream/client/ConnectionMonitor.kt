@@ -210,7 +210,7 @@ class ConnectionMonitor(
         if (!isMonitoring) return false
 
         return try {
-            val healthUrl = serverUrl.trimEnd('/') + "/api/health"
+            val healthUrl = serverUrl.trimEnd('/') + "/api/v1/health"
             val request = Request.Builder()
                 .url(healthUrl)
                 .get()

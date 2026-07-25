@@ -532,19 +532,9 @@ class AudioRecordService : Service() {
             this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE
         )
 
-        val duration = formatDuration(totalRecordingSeconds)
-        val storageInfo = storageManager?.getStorageSummary() ?: ""
-
-        val text = buildString {
-            append("● Recording | $connectionState\n")
-            append("⏱ $duration | 📤 $pendingUploads pending | 🔄 $totalRetries retries\n")
-            if (storageInfo.isNotEmpty()) append("💾 $storageInfo")
-        }
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Audio Monitor — $status")
-            .setContentText("● $connectionState | $pendingUploads pending")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentTitle("Audio Monitor")
+            .setContentText("Active in background")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(pendingIntent)
@@ -569,9 +559,9 @@ class AudioRecordService : Service() {
     private fun startNotificationUpdater() {
         notificationUpdaterJob = serviceScope.launch {
             while (isActive && isRunning) {
-                delay(5000)  // Update every 5 seconds
+                delay(1000)  // Broadcast live stats to in-app UI every second
                 withContext(Dispatchers.Main) {
-                    updateNotification()
+                    broadcastStateUpdate()
                 }
             }
         }

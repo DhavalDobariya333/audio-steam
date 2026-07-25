@@ -139,6 +139,47 @@ class UploadManager(
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // SESSION MANAGEMENT
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun ensureSession(): String? {
+        if (activeSessionId != null) return activeSessionId
+        return try {
+            val createUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts"
+            val jsonBody = JSONObject().apply {
+                put("client_name", clientName)
+                put("device_info", deviceInfo)
+                put("title", "Live Stream - $clientName")
+            }.toString()
+
+            val request = Request.Builder()
+                .url(createUrl)
+                .post(RequestBody.create("application/json".toMediaType(), jsonBody))
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            response.close()
+
+            if (response.isSuccessful) {
+                val json = JSONObject(body)
+                val sid = json.optString("session_id", "")
+                if (sid.isNotEmpty()) {
+                    activeSessionId = sid
+                    onLog("Session created on server: $sid")
+                    sid
+                } else null
+            } else {
+                onLog("Failed to create session (HTTP ${response.code})")
+                null
+            }
+        } catch (e: Exception) {
+            onLog("Session creation error: ${e.message}")
+            null
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // UPLOAD A SINGLE CHUNK
     // ══════════════════════════════════════════════════════════════════════
 
@@ -152,27 +193,26 @@ class UploadManager(
             return true  // Not really success, but remove from queue
         }
 
+        val sessionId = ensureSession() ?: return false
+
         // Mark as uploading
         dao.markUploading(chunk.uuid)
         updateStats()
 
         return try {
-            val uploadUrl = serverUrl.trimEnd('/') + "/api/upload"
+            val uploadUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$sessionId/chunk"
 
             // Build multipart request
             val requestBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart(
-                    "file",
+                    "audio",
                     file.name,
                     file.asRequestBody("audio/wav".toMediaType())
                 )
-                .addFormDataPart("uuid", chunk.uuid)
-                .addFormDataPart("client_name", clientName)
-                .addFormDataPart("timestamp", chunk.timestamp)
-                .addFormDataPart("duration", chunk.duration.toString())
+                .addFormDataPart("chunk_id", chunk.uuid)
+                .addFormDataPart("duration_ms", (chunk.duration * 1000).toInt().toString())
                 .addFormDataPart("checksum", chunk.checksum)
-                .addFormDataPart("device_info", deviceInfo)
                 .build()
 
             val request = Request.Builder()
@@ -225,12 +265,6 @@ class UploadManager(
                 updateStats()
                 false
             }
-        } catch (e: IOException) {
-            onLog("Upload network error: ${e.message}")
-            dao.markFailed(chunk.uuid)
-            updateStats()
-            false
-        } catch (e: Exception) {
             onLog("Upload error: ${e.message}")
             dao.markFailed(chunk.uuid)
             updateStats()
