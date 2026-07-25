@@ -66,17 +66,12 @@ app.use('/storage', express.static(path.join(PUBLIC_DIR, 'storage'), {
     },
 }));
 
-// Host Dashboard — served from /dashboard/
-fs.mkdirSync(DASHBOARD_DIR, { recursive: true });
-app.use('/dashboard', express.static(DASHBOARD_DIR));
+// Unified Single Page App (SPA) — served from PUBLIC_DIR
+app.use(express.static(PUBLIC_DIR));
 
-// Listener Web Player — served from /listener/
-fs.mkdirSync(LISTENER_DIR, { recursive: true });
-app.use('/listener', express.static(LISTENER_DIR));
-
-// Root redirect → dashboard
-app.get('/', (_req, res) => {
-    res.redirect('/dashboard/');
+// Direct routes for /, /dashboard, /listener → serve SPA
+app.get(['/', '/dashboard', '/dashboard/*', '/listener', '/listener/*'], (_req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
 // ════════════════════════════════════════════════════════════════════════════

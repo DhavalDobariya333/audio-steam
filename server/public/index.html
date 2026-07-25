@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Stream — Live Hub & Dashboard</title>
+    <meta name="description" content="All-in-one Live Audio Player, Stream Visualizer, and Session Manager.">
+    <meta name="theme-color" content="#090912">
+
+    <!-- Google Fonts & HLS.js -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📡</text></svg>">
+</head>
+<body>
+
+    <div class="app">
+
+        <!-- Top Header -->
+        <header class="header">
+            <div class="header__brand">
+                <div class="logo-icon">📡</div>
+                <div>
+                    <h1 class="header__title">Audio Stream</h1>
+                    <div class="header__status" id="server-status">
+                        <span class="status-dot status-dot--online"></span>
+                        <span id="status-text">Server Live</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View Mode Switcher -->
+            <div class="view-switch">
+                <button class="switch-btn active" id="tab-all">⚡ Split View</button>
+                <button class="switch-btn" id="tab-player">🎧 Player</button>
+                <button class="switch-btn" id="tab-dashboard">📊 Dashboard</button>
+            </div>
+        </header>
+
+        <!-- Stats Chips Bar -->
+        <div class="stats-bar" id="stats-bar">
+            <div class="stat-card stat-card--accent">
+                <span class="stat-card__val" id="stat-active">0</span>
+                <span class="stat-card__lbl">Live Now</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-sessions">0</span>
+                <span class="stat-card__lbl">Total Sessions</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-chunks">0</span>
+                <span class="stat-card__lbl">Total Chunks</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-duration">00:00</span>
+                <span class="stat-card__lbl">Total Duration</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-storage">0 B</span>
+                <span class="stat-card__lbl">Storage Used</span>
+            </div>
+        </div>
+
+        <!-- Main Layout Grid -->
+        <main class="grid-container" id="grid-container">
+
+            <!-- LEFT: LIVE PLAYER SECTION -->
+            <section class="section-card section-card--player" id="sec-player">
+                <div class="card-head">
+                    <h2 class="card-title">🎧 Live Audio Player</h2>
+                    <span class="live-pill" id="live-indicator">OFFLINE</span>
+                </div>
+
+                <!-- Device Selector Dropdown -->
+                <div class="selector-box">
+                    <label for="session-select" class="field-label">SELECT BROADCASTING DEVICE</label>
+                    <select id="session-select" class="select-field">
+                        <option value="">Searching for live broadcasts...</option>
+                    </select>
+                </div>
+
+                <!-- Audio Visualizer Canvas -->
+                <div class="visualizer-wrapper">
+                    <canvas id="visualizer" width="600" height="140"></canvas>
+                    <div class="visualizer-overlay" id="visualizer-overlay">Select a live device to start listening</div>
+                </div>
+
+                <!-- Track Info -->
+                <div class="track-info">
+                    <div class="track-info__name" id="track-name">No Device Playing</div>
+                    <div class="track-info__meta" id="track-meta">Connect an Android device to stream</div>
+                </div>
+
+                <!-- Progress & Seek Bar -->
+                <div class="progress-section">
+                    <div class="progress-bar-container" id="progress-bar-container">
+                        <div class="progress-buffer" id="progress-buffer"></div>
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="time-row">
+                        <span id="time-current">00:00</span>
+                        <button class="live-badge-btn" id="btn-jump-live">● LIVE</button>
+                        <span id="time-total">00:00</span>
+                    </div>
+                </div>
+
+                <!-- Player Controls -->
+                <div class="controls-row">
+                    <button class="ctrl-btn ctrl-btn--rewind" id="btn-rewind" title="Rewind 15 Seconds" disabled>
+                        ⏮ 15s
+                    </button>
+                    <button class="ctrl-btn ctrl-btn--play" id="btn-play" title="Play / Pause" disabled>
+                        <span id="icon-play">▶ PLAY</span>
+                        <span id="icon-pause" style="display:none;">⏸ PAUSE</span>
+                    </button>
+                </div>
+
+                <!-- Hidden Native Audio Element -->
+                <audio id="audio-player" crossorigin="anonymous" preload="none"></audio>
+            </section>
+
+            <!-- RIGHT: DASHBOARD & SESSIONS SECTION -->
+            <section class="section-card section-card--dashboard" id="sec-dashboard">
+                <div class="card-head">
+                    <div>
+                        <h2 class="card-title">📊 Broadcast Sessions & Storage</h2>
+                        <div class="card-sub" id="session-count">0 sessions recorded</div>
+                    </div>
+                    <button class="btn-refresh" id="btn-refresh" title="Refresh list">🔄</button>
+                </div>
+
+                <div class="session-list-container">
+                    <ul class="session-list" id="session-list">
+                        <li class="empty-state">Loading sessions...</li>
+                    </ul>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <div class="modal__icon">🗑️</div>
+            <div class="modal__title">Delete Recording Session?</div>
+            <div class="modal__desc">This will permanently delete all audio chunks and HLS streams for this session.</div>
+            <div class="modal__id" id="modal-session-id"></div>
+            <div class="modal__actions">
+                <button class="btn btn--secondary" id="modal-cancel">Cancel</button>
+                <button class="btn btn--danger" id="modal-confirm">Delete Permanently</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
