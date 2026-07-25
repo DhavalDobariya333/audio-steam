@@ -37,7 +37,7 @@ class UploadManager(
     private val context: Context,
     private val serverUrl: String,
     private val clientName: String,
-    private val deviceInfo: String,
+    deviceInfo: String,
     private val connectionMonitor: ConnectionMonitor,
     private val storageManager: StorageManager,
     private val onLog: (String) -> Unit,
@@ -55,6 +55,12 @@ class UploadManager(
     private val currentRetryCount = AtomicInteger(0)
     @Volatile
     private var activeSessionId: String? = null
+    @Volatile
+    private var currentDeviceInfo: String = deviceInfo
+
+    fun updateDeviceInfo(newInfo: String) {
+        this.currentDeviceInfo = newInfo
+    }
 
     private val uploadScope = CoroutineScope(
         Dispatchers.IO + SupervisorJob() + CoroutineExceptionHandler { _, e ->
@@ -168,7 +174,7 @@ class UploadManager(
             val createUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts"
             val jsonBody = JSONObject().apply {
                 put("client_name", clientName)
-                put("device_info", deviceInfo)
+                put("device_info", currentDeviceInfo)
                 put("title", "Live Stream - $clientName")
             }.toString()
 
