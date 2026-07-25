@@ -170,11 +170,11 @@ function renderSessions() {
         const statusClass = isLive ? 'live' : 'ended';
         const badgeText = isLive ? '● LIVE' : 'ENDED';
         const duration = formatDuration(s.total_duration || 0);
-        const date = (s.created_at || '').replace('T', ' ').split('.')[0];
+        const date = formatIST(s.created_at);
         const chunks = s.total_chunks || 0;
         const size = formatSize(s.total_bytes || 0);
         const client = esc(s.client_name || 'Unknown');
-        const shortId = s.session_id.slice(0, 8) + '…';
+        const shortId = s.session_id.slice(0, 8);
 
         return `
             <li class="session-card session-card--${statusClass}">
@@ -188,10 +188,13 @@ function renderSessions() {
                             <span class="session-card__meta-item">⏱ ${duration}</span>
                             <span class="session-card__meta-item">📦 ${chunks} chunks</span>
                             <span class="session-card__meta-item">📁 ${size}</span>
-                            <span class="session-card__meta-item">📅 ${date}</span>
+                            <span class="session-card__meta-item">📅 ${date} (IST)</span>
                         </div>
                     </div>
                     <div class="session-card__actions">
+                        <a href="/storage/sessions/${s.session_id}/hls/vod.m3u8" download="audio_session_${shortId}.m3u8" class="btn btn--icon btn--sm btn--ghost" title="Download Audio Recording">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        </a>
                         ${isLive ? `<a href="/listener/" class="btn btn--icon btn--sm btn--ghost" title="Listen Live">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                         </a>` : ''}
@@ -201,7 +204,7 @@ function renderSessions() {
                         </button>
                     </div>
                 </div>
-                <div class="session-card__id">${shortId}</div>
+                <div class="session-card__id">ID: ${s.session_id}</div>
             </li>
         `;
     }).join('');
@@ -250,6 +253,21 @@ async function confirmDelete() {
 // ════════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ════════════════════════════════════════════════════════════════════════════
+
+function formatIST(dateStr) {
+    if (!dateStr) return '—';
+    try {
+        const d = new Date(dateStr);
+        return d.toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            dateStyle: 'medium',
+            timeStyle: 'short',
+            hour12: true
+        });
+    } catch {
+        return dateStr;
+    }
+}
 
 function formatDuration(s) {
     s = Math.max(0, Math.floor(s));

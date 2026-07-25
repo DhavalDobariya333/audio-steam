@@ -89,6 +89,22 @@ class UploadManager(
     }
 
     fun stop() {
+        val sid = activeSessionId
+        if (sid != null) {
+            uploadScope.launch {
+                try {
+                    val endUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$sid/end"
+                    val request = Request.Builder()
+                        .url(endUrl)
+                        .put(RequestBody.create("application/json".toMediaType(), "{}"))
+                        .build()
+                    httpClient.newCall(request).execute().close()
+                    onLog("✓ Session $sid ended on server")
+                } catch (e: Exception) {
+                    onLog("End session warning: ${e.message}")
+                }
+            }
+        }
         isRunning.set(false)
         activeSessionId = null
         onLog("Upload manager stopped")

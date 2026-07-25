@@ -123,9 +123,12 @@ function updateSessionList(sessions) {
         });
         ui.select.disabled = false;
         
-        // Restore selection if it still exists
+        // Restore selection if it still exists or auto-select if only 1 device
         if (prev && sessions.find(s => s.session_id === prev)) {
             ui.select.value = prev;
+        } else if (sessions.length === 1 && !state.currentSession) {
+            ui.select.value = sessions[0].session_id;
+            loadSession(sessions[0].session_id);
         }
     }
 }
@@ -252,9 +255,9 @@ function rewind15() {
 }
 
 function jumpToLive() {
-    // Seek to near the end of the buffered live stream
+    state.isLiveLock = true;
     if (ui.audio.duration && Number.isFinite(ui.audio.duration)) {
-        ui.audio.currentTime = ui.audio.duration - 2; // 2 seconds from edge
+        ui.audio.currentTime = Math.max(0, ui.audio.duration - 1);
     } else if (hls && hls.liveSyncPosition) {
         ui.audio.currentTime = hls.liveSyncPosition;
     }
@@ -266,11 +269,21 @@ function updateProgress() {
     const cur = ui.audio.currentTime;
     const dur = ui.audio.duration;
     
+    // Auto-advance if locked to live
+    if (state.isLiveLock && dur - cur > 3) {
+        ui.audio.currentTime = dur - 1;
+    }
+
     ui.progressFill.style.width = `${(cur / dur) * 100}%`;
     ui.timeCurrent.textContent = formatTime(cur);
     
     // Check if we are "Live" (within 5 seconds of the edge)
     const isLiveEdge = dur - cur < 5;
+    if (!isLiveEdge && state.isLiveLock && (dur - cur > 8)) {
+        // User manually seeked back into past recording
+        state.isLiveLock = false;
+    }
+
     if (isLiveEdge !== state.isLive) {
         state.isLive = isLiveEdge;
         ui.timeTotal.classList.toggle('active', isLiveEdge);

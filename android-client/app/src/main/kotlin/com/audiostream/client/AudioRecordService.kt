@@ -560,6 +560,7 @@ class AudioRecordService : Service() {
         notificationUpdaterJob = serviceScope.launch {
             while (isActive && isRunning) {
                 delay(1000)  // Broadcast live stats to in-app UI every second
+                totalRecordingSeconds++
                 withContext(Dispatchers.Main) {
                     broadcastStateUpdate()
                 }
