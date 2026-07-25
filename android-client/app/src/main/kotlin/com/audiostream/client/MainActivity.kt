@@ -101,7 +101,7 @@ class MainActivity : AppCompatActivity() {
 
         // Load saved preferences
         prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
-        val savedUrl = prefs.getString("server_url", "https://your-tunnel.trycloudflare.com")
+        val savedUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com")
         etServerUrl.setText(savedUrl)
 
         // Show client name
