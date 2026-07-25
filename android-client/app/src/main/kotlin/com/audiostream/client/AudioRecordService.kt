@@ -138,7 +138,7 @@ class AudioRecordService : Service() {
 
     private fun getBatteryInfo(): String {
         return try {
-            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
             val batteryStatus = registerReceiver(null, filter)
             val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
             val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
