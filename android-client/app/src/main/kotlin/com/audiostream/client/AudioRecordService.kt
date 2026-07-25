@@ -574,6 +574,7 @@ class AudioRecordService : Service() {
 
     private fun broadcastStateUpdate() {
         val intent = Intent(ACTION_STATE_UPDATE).apply {
+            setPackage(packageName)
             putExtra(EXTRA_PENDING, pendingUploads)
             putExtra(EXTRA_RETRIES, totalRetries)
             putExtra(EXTRA_DURATION, totalRecordingSeconds)
@@ -585,6 +586,7 @@ class AudioRecordService : Service() {
 
     private fun sendLog(message: String) {
         val intent = Intent(ACTION_LOG).apply {
+            setPackage(packageName)
             putExtra(EXTRA_MESSAGE, message)
         }
         sendBroadcast(intent)

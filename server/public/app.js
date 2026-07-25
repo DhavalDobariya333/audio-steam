@@ -224,7 +224,7 @@ function loadSession(sessionId) {
     
     state.currentSession = session;
     ui.trackName.textContent = session.client_name || 'Audio Session';
-    ui.trackMeta.textContent = `Device: ${session.device_info || 'Android'} | Status: ${session.status.toUpperCase()}`;
+    ui.trackMeta.textContent = `Device: ${session.device_info || 'Android'} | Status: ${(session.status || 'live').toUpperCase()}`;
     
     ui.btnPlay.disabled = false;
     ui.btnRewind.disabled = false;
