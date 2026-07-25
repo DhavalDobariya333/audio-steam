@@ -9,7 +9,7 @@ import path from 'path';
 
 // ── Server ──
 export const HOST = process.env.AUDIO_HOST || '0.0.0.0';
-export const PORT = parseInt(process.env.AUDIO_PORT || '8765', 10);
+export const PORT = parseInt(process.env.PORT || process.env.AUDIO_PORT || '8765', 10);
 
 // ── Paths ──
 export const PROJECT_ROOT = path.resolve(__dirname, '..');

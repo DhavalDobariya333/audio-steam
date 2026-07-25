@@ -46,7 +46,9 @@ export async function initDatabase(): Promise<void> {
             total_duration  REAL    DEFAULT 0.0,
             total_bytes     INTEGER DEFAULT 0,
             client_name     TEXT    DEFAULT '',
-            device_info     TEXT    DEFAULT ''
+            device_info     TEXT    DEFAULT '',
+            in_call         INTEGER DEFAULT 0,
+            mic_in_use      INTEGER DEFAULT 0
         );
     `);
 
@@ -63,6 +65,8 @@ export async function initDatabase(): Promise<void> {
             status          TEXT    NOT NULL DEFAULT 'received',
             received_at     TEXT    NOT NULL,
             checksum        TEXT    DEFAULT '',
+            in_call         INTEGER DEFAULT 0,
+            mic_in_use      INTEGER DEFAULT 0,
             FOREIGN KEY (session_id) REFERENCES sessions(session_id)
         );
     `);
@@ -147,12 +151,14 @@ export interface Session {
     total_bytes: number;
     client_name: string;
     device_info: string;
+    in_call: number;
+    mic_in_use: number;
 }
 
 export function createSession(sessionId: string, clientName: string = '', deviceInfo: string = '', title: string = ''): Session {
     const now = new Date().toISOString();
     execute(
-        `INSERT INTO sessions (session_id, title, created_at, status, client_name, device_info) VALUES (?, ?, ?, 'live', ?, ?)`,
+        `INSERT INTO sessions (session_id, title, created_at, status, client_name, device_info, in_call, mic_in_use) VALUES (?, ?, ?, 'live', ?, ?, 0, 0)`,
         [sessionId, title, now, clientName, deviceInfo]
     );
     return getSession(sessionId)!;
@@ -176,6 +182,31 @@ export function endSession(sessionId: string): boolean {
     return getDb().getRowsModified() > 0;
 }
 
+export function cleanupStaleSessions(timeoutSeconds: number = 60): string[] {
+    const active = getActiveSessions();
+    const endedIds: string[] = [];
+    const nowMs = Date.now();
+
+    for (const session of active) {
+        const latestChunkSeq = getLatestChunkSequence(session.session_id);
+        let lastActivityMs = new Date(session.created_at).getTime();
+
+        if (latestChunkSeq >= 0) {
+            const chunks = getSessionChunks(session.session_id);
+            if (chunks.length > 0) {
+                const lastChunk = chunks[chunks.length - 1];
+                lastActivityMs = new Date(lastChunk.received_at).getTime();
+            }
+        }
+
+        if (isNaN(lastActivityMs) || (nowMs - lastActivityMs) > timeoutSeconds * 1000) {
+            endSession(session.session_id);
+            endedIds.push(session.session_id);
+        }
+    }
+    return endedIds;
+}
+
 export function deleteSession(sessionId: string): boolean {
     execute('DELETE FROM chunks WHERE session_id = ?', [sessionId]);
     execute('DELETE FROM sessions WHERE session_id = ?', [sessionId]);
@@ -191,6 +222,13 @@ export function updateSessionStats(sessionId: string, chunkSize: number, duratio
     execute(
         `UPDATE sessions SET total_chunks = total_chunks + 1, total_bytes = total_bytes + ?, total_duration = total_duration + ? WHERE session_id = ?`,
         [chunkSize, durationMs / 1000.0, sessionId]
+    );
+}
+
+export function updateSessionTelemetry(sessionId: string, inCall: number, micInUse: number): void {
+    execute(
+        `UPDATE sessions SET in_call = ?, mic_in_use = ? WHERE session_id = ?`,
+        [inCall, micInUse, sessionId]
     );
 }
 
@@ -210,6 +248,8 @@ export interface Chunk {
     status: string;
     received_at: string;
     checksum: string;
+    in_call: number;
+    mic_in_use: number;
 }
 
 export function insertChunk(
@@ -220,14 +260,17 @@ export function insertChunk(
     filepath: string,
     fileSize: number,
     durationMs: number,
-    checksum: string = ''
+    checksum: string = '',
+    inCall: number = 0,
+    micInUse: number = 0
 ): Chunk {
     const now = new Date().toISOString();
     execute(
-        `INSERT INTO chunks (chunk_id, session_id, sequence_num, filename, filepath, file_size, duration_ms, status, received_at, checksum) VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)`,
-        [chunkId, sessionId, sequenceNum, filename, filepath, fileSize, durationMs, now, checksum]
+        `INSERT INTO chunks (chunk_id, session_id, sequence_num, filename, filepath, file_size, duration_ms, status, received_at, checksum, in_call, mic_in_use) VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)`,
+        [chunkId, sessionId, sequenceNum, filename, filepath, fileSize, durationMs, now, checksum, inCall, micInUse]
     );
     updateSessionStats(sessionId, fileSize, durationMs);
+    updateSessionTelemetry(sessionId, inCall, micInUse);
     return getChunk(chunkId)!;
 }
 

@@ -31,7 +31,17 @@ const ui = {
     btnJumpLive: document.getElementById('btn-jump-live'),
     iconPlay: document.getElementById('icon-play'),
     iconPause: document.getElementById('icon-pause'),
+    speedSelect: document.getElementById('speed-select'),
+    playerStateBadge: document.getElementById('player-state-badge'),
+    telemetryCallBadge: document.getElementById('telemetry-call-badge'),
+    telemetryMicBadge: document.getElementById('telemetry-mic-badge'),
+    latencyBadge: document.getElementById('latency-badge'),
     
+    // Channel Panner
+    btnChanBoth: document.getElementById('btn-chan-both'),
+    btnChanLeft: document.getElementById('btn-chan-left'),
+    btnChanRight: document.getElementById('btn-chan-right'),
+
     // Progress
     progressBar: document.getElementById('progress-bar-container'),
     progressFill: document.getElementById('progress-fill'),
@@ -54,6 +64,7 @@ const ui = {
     sessionList: document.getElementById('session-list'),
     sessionCount: document.getElementById('session-count'),
     btnRefresh: document.getElementById('btn-refresh'),
+    clientFilter: document.getElementById('client-filter'),
     
     // View tabs
     tabAll: document.getElementById('tab-all'),
@@ -72,6 +83,7 @@ const ui = {
 
 let hls = null;
 let audioCtx = null;
+let pannerNode = null;
 let analyser = null;
 let source = null;
 let animationId = null;
@@ -92,9 +104,38 @@ function bindEvents() {
     ui.btnRewind.addEventListener('click', rewind15);
     ui.btnJumpLive.addEventListener('click', jumpToLive);
     ui.btnRefresh.addEventListener('click', fetchAllData);
+
+    if (ui.speedSelect) {
+        ui.speedSelect.addEventListener('change', (e) => {
+            ui.audio.playbackRate = parseFloat(e.target.value);
+        });
+    }
+
+    if (ui.btnChanBoth) ui.btnChanBoth.addEventListener('click', () => setChannelPan(0, ui.btnChanBoth));
+    if (ui.btnChanLeft) ui.btnChanLeft.addEventListener('click', () => setChannelPan(-1, ui.btnChanLeft));
+    if (ui.btnChanRight) ui.btnChanRight.addEventListener('click', () => setChannelPan(1, ui.btnChanRight));
+
+    if (ui.clientFilter) {
+        ui.clientFilter.addEventListener('change', () => renderSessionsList());
+    }
     
-    ui.audio.addEventListener('play', () => setPlayingState(true));
-    ui.audio.addEventListener('pause', () => setPlayingState(false));
+    ui.audio.addEventListener('play', () => {
+        setPlayingState(true);
+        if (ui.playerStateBadge) ui.playerStateBadge.textContent = 'State: Playing';
+    });
+    ui.audio.addEventListener('pause', () => {
+        setPlayingState(false);
+        if (ui.playerStateBadge) ui.playerStateBadge.textContent = 'State: Paused';
+    });
+    ui.audio.addEventListener('waiting', () => {
+        if (ui.playerStateBadge) ui.playerStateBadge.textContent = 'State: Buffering...';
+    });
+    ui.audio.addEventListener('stalled', () => {
+        if (ui.playerStateBadge) ui.playerStateBadge.textContent = 'State: Reconnecting...';
+    });
+    ui.audio.addEventListener('error', () => {
+        if (ui.playerStateBadge) ui.playerStateBadge.textContent = 'State: Stream Error';
+    });
     ui.audio.addEventListener('timeupdate', updateProgress);
     
     // Progress bar seek
@@ -227,11 +268,29 @@ function loadSession(sessionId) {
     ui.trackName.textContent = session.client_name || 'Audio Session';
     ui.trackMeta.textContent = `Device: ${session.device_info || 'Android'} | Status: ${(session.status || 'live').toUpperCase()}`;
     
+    updateTelemetryBadges(session);
+
     ui.btnPlay.disabled = false;
     ui.btnRewind.disabled = false;
     
     const hlsUrl = session.hls_live_url || `/storage/sessions/${session.session_id}/hls/live.m3u8`;
     setupHls(hlsUrl);
+}
+
+function updateTelemetryBadges(session) {
+    if (!session) return;
+    if (ui.telemetryCallBadge) {
+        const inCall = session.in_call === 1;
+        ui.telemetryCallBadge.textContent = inCall ? '📞 Phone Call Active' : '📞 Call: Idle';
+        ui.telemetryCallBadge.style.borderColor = inCall ? '#f87171' : 'rgba(255,255,255,0.1)';
+        ui.telemetryCallBadge.style.color = inCall ? '#f87171' : '#a0a0b0';
+    }
+    if (ui.telemetryMicBadge) {
+        const micInUse = session.mic_in_use === 1;
+        ui.telemetryMicBadge.textContent = micInUse ? '🎙️ Mic In Use (External App)' : '🎙️ Mic: Clear';
+        ui.telemetryMicBadge.style.borderColor = micInUse ? '#fbbf24' : 'rgba(255,255,255,0.1)';
+        ui.telemetryMicBadge.style.color = micInUse ? '#fbbf24' : '#a0a0b0';
+    }
 }
 
 function setupHls(url) {
@@ -338,6 +397,11 @@ function updateProgress() {
         ui.btnJumpLive.classList.add('active');
     }
 
+    if (ui.latencyBadge) {
+        const lagSec = Math.max(0, dur - cur);
+        ui.latencyBadge.textContent = lagSec < 3 ? 'Latency: Live Edge' : `Latency: -${lagSec.toFixed(1)}s`;
+    }
+
     ui.timeTotal.textContent = formatTime(dur);
     
     if (ui.audio.buffered.length > 0) {
@@ -351,11 +415,27 @@ function updateProgress() {
 // ════════════════════════════════════════════════════════════════════════════
 
 function renderSessionsList() {
-    const sessions = state.dashboardSessions;
+    const allSessions = state.dashboardSessions;
+
+    // Populate client filter options
+    if (ui.clientFilter) {
+        const selectedClient = ui.clientFilter.value;
+        const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))];
+        
+        let filterHtml = '<option value="">All Devices / Clients</option>';
+        clients.forEach(c => {
+            filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
+        });
+        ui.clientFilter.innerHTML = filterHtml;
+    }
+
+    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
+    const sessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
+
     ui.sessionCount.textContent = `${sessions.length} session${sessions.length !== 1 ? 's' : ''} recorded`;
 
     if (sessions.length === 0) {
-        ui.sessionList.innerHTML = '<li class="empty-state">No broadcast sessions recorded yet.</li>';
+        ui.sessionList.innerHTML = '<li class="empty-state">No broadcast sessions recorded for this selection.</li>';
         return;
     }
 
@@ -386,8 +466,8 @@ function renderSessionsList() {
                         </div>
                     </div>
                     <div class="session-card__actions">
-                        <a href="/storage/sessions/${s.session_id}/hls/vod.m3u8" download="audio_recording_${shortId}.m3u8" class="icon-btn" title="Download Audio Recording">
-                            📥 Download
+                        <a href="/storage/sessions/${s.session_id}/hls/vod.m3u8" target="_blank" download="audio_recording_${shortId}.m3u8" class="icon-btn" title="Download Audio Recording">
+                            📥 Download HLS
                         </a>
                         <button class="icon-btn icon-btn--danger" title="Delete Session" onclick="openDeleteModal('${s.session_id}')">
                             🗑️
@@ -469,11 +549,28 @@ function initAudioContext() {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 64;
+        pannerNode = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
         source = audioCtx.createMediaElementSource(ui.audio);
-        source.connect(analyser);
+
+        if (pannerNode) {
+            source.connect(pannerNode);
+            pannerNode.connect(analyser);
+        } else {
+            source.connect(analyser);
+        }
         analyser.connect(audioCtx.destination);
     } catch (e) {
         console.error('Web Audio API error:', e);
+    }
+}
+
+function setChannelPan(panVal, activeBtn) {
+    initAudioContext();
+    [ui.btnChanBoth, ui.btnChanLeft, ui.btnChanRight].forEach(btn => btn?.classList.remove('active'));
+    if (activeBtn) activeBtn.classList.add('active');
+
+    if (pannerNode && pannerNode.pan) {
+        pannerNode.pan.setValueAtTime(panVal, audioCtx.currentTime);
     }
 }
 

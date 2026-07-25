@@ -107,7 +107,7 @@
                     </div>
                 </div>
 
-                <!-- Player Controls -->
+                <!-- Controls & Speed Row -->
                 <div class="controls-row">
                     <button class="ctrl-btn ctrl-btn--rewind" id="btn-rewind" title="Rewind 15 Seconds" disabled>
                         ⏮ 15s
@@ -116,6 +116,32 @@
                         <span id="icon-play">▶ PLAY</span>
                         <span id="icon-pause" style="display:none;">⏸ PAUSE</span>
                     </button>
+                    <div class="speed-box">
+                        <label for="speed-select" class="speed-label">⚡ Speed</label>
+                        <select id="speed-select" class="speed-select">
+                            <option value="0.5">0.5x</option>
+                            <option value="1.0" selected>1.0x</option>
+                            <option value="1.25">1.25x</option>
+                            <option value="1.5">1.5x</option>
+                            <option value="2.0">2.0x</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Channel Panner / Solo Controls -->
+                <div class="channel-row">
+                    <span class="field-label">AUDIO CHANNEL:</span>
+                    <button class="channel-btn active" id="btn-chan-both">🎛️ Both (Stereo)</button>
+                    <button class="channel-btn" id="btn-chan-left">🎙️ Mic Only (L)</button>
+                    <button class="channel-btn" id="btn-chan-right">🎵 Internal Only (R)</button>
+                </div>
+
+                <!-- Latency, Telemetry & Buffer Status Row -->
+                <div class="player-status-row">
+                    <span class="status-badge" id="player-state-badge">State: Idle</span>
+                    <span class="status-badge" id="telemetry-call-badge">📞 Call: Idle</span>
+                    <span class="status-badge" id="telemetry-mic-badge">🎙️ Mic: Clear</span>
+                    <span class="status-badge" id="latency-badge">Latency: --s</span>
                 </div>
 
                 <!-- Hidden Native Audio Element -->
@@ -130,6 +156,12 @@
                         <div class="card-sub" id="session-count">0 sessions recorded</div>
                     </div>
                     <button class="btn-refresh" id="btn-refresh" title="Refresh list">🔄</button>
+                </div>
+
+                <div class="filter-box">
+                    <select id="client-filter" class="select-field select-field--sm">
+                        <option value="">All Devices / Clients</option>
+                    </select>
                 </div>
 
                 <div class="session-list-container">

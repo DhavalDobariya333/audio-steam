@@ -1,64 +1,88 @@
-# 🎙️ Live Audio Monitor (Termux Server Edition)
+# 📡 Time-Shifted Live Audio Streaming Platform
 
-A complete, production-ready audio surveillance and streaming architecture hosted entirely on an Android phone using Termux. 
+A production-grade, fault-tolerant live audio streaming, HLS transcoding, and time-shifted playback platform.
 
-No VPS, no cloud hosting, no third-party backends. Just your phone serving the dashboard and handling the WebSocket connections, securely tunneled to the internet via Cloudflare.
-
-## 🏗️ Architecture
+## 🏗️ System Architecture
 
 ```
-[ Friend's Phone ] 
-       │ 
-       │ (Captures Mic, sends 16kHz PCM over WebSocket)
-       ▼
-[ Internet ]  →  [ Cloudflare Tunnel ] 
-                       │ (Routes traffic securely)
-                       ▼
-[ Your Phone (Termux) ]
-       ├── FastAPI Server (0.0.0.0:8765)
-       ├── WebSocket Connection Manager
-       ├── WAV Recorder (Saves locally)
-       └── Vanilla JS Dashboard
+┌────────────────────────┐         HTTP POST /chunk         ┌──────────────────────────┐
+│  Android Client (App)  │ ───────────────────────────────> │  Node.js / Express Server│
+│  - Mic Capture (16kHz) │  (FIFO Queue, Offline-First)     │  - Ingest API            │
+│  - Silence Detection   │                                  │  - HLS Transcoder (FFmpeg)│
+│  - Foreground Service  │                                  │  - SQLite (sql.js)       │
+└────────────────────────┘                                  └────────────┬─────────────┘
+                                                                         │
+                                                                         │ HLS Stream (.m3u8)
+                                                                         ▼
+                                                            ┌──────────────────────────┐
+                                                            │  Web Dashboard & Listener│
+                                                            │  - HLS.js Live Player    │
+                                                            │  - Playback Speed Controls│
+                                                            │  - Multi-Device Filter   │
+                                                            └──────────────────────────┘
 ```
-
-## 📂 Project Structure
-
-- `server/` — Python/FastAPI backend. Handles connections, PCM relay, and WAV recording.
-- `server/static/` — Vanilla HTML/CSS/JS frontend. Live waveform, Web Audio API playback.
-- `android-client/` — Kotlin application. Captures mic audio in a Foreground Service and streams it to the server.
-- `recordings/` — Automatically created. Where your saved WAV files are stored.
-
-## 🚀 Deployment Guide
-
-We've broken down the deployment into 3 clear steps:
-
-1. **[Termux Server Setup](SETUP_TERMUX.md)** — Install Python, disable Android battery optimization, and run the FastAPI server.
-2. **[Cloudflare Tunnel Setup](SETUP_CLOUDFLARE.md)** — Expose your local Termux server to the internet using a free Cloudflare tunnel (no hosting required).
-3. **Android Client Setup** — Compile the Kotlin client via CLI and install it on the target device.
 
 ---
 
-### Building the Android Client (CLI)
+## 📂 Project Structure
 
-You don't need Android Studio. You can build the APK directly from the command line using Gradle wrapper (or install gradle).
+- **`server/`** — Node.js / TypeScript + Express backend. Handles audio chunk ingestion, HLS transcoding (`FFmpeg`), SQLite state management, and serves the unified web SPA.
+- **`server/public/`** — Unified Single Page Application (SPA) HTML5 HLS Player, Frequency Visualizer, and Admin Dashboard.
+- **`android-client/`** — Kotlin application. Captures mic audio in a Foreground Service, buffers chunks locally in Room DB, and streams to server with zero data loss.
+
+---
+
+## 🚀 Server Setup & Local Running
+
+1. **Install Dependencies & Build**:
+   ```bash
+   cd server
+   npm install
+   npm run build
+   ```
+
+2. **Run Dev / Production Server**:
+   ```bash
+   # Development
+   npm run dev
+
+   # Production
+   npm start
+   ```
+
+3. **Endpoints**:
+   - **Dashboard / Unified Player**: `http://localhost:8765/`
+   - **Ingest API**: `http://localhost:8765/api/v1/broadcasts`
+   - **Health Check**: `http://localhost:8765/api/v1/health`
+
+---
+
+## 📱 Building the Android Client (CLI)
 
 1. Navigate to the client directory:
    ```bash
    cd android-client
    ```
 
-2. Make sure you have the Android SDK installed. If you are building this ON Termux itself, you will need tools like `ecj` and `d8`, but it is much easier to compile the APK on a PC once and send the `.apk` file to the target phone.
-
-   *(Assuming building on PC with JDK 17+ and Android SDK set in `local.properties`):*
+2. Compile debug APK using Gradle:
    ```bash
-   # Linux/Mac
-   ./gradlew assembleDebug
-
    # Windows
    gradlew.bat assembleDebug
+
+   # Linux/Mac
+   ./gradlew assembleDebug
    ```
 
-3. The compiled APK will be located at:
+3. The compiled APK will be at:
    `android-client/app/build/outputs/apk/debug/app-debug.apk`
 
-Install this APK on your friend's phone. Open it, enter the Cloudflare Tunnel URL (e.g., `wss://audio.yourdomain.com/ws/stream`), and tap Connect.
+---
+
+## ✨ Features Implemented
+
+- **Fault-Tolerant Recording**: Android client captures mic input continuously regardless of network drops.
+- **Silence Detection**: Client computes RMS volume to skip empty silence chunks and reduce storage/bandwidth consumption.
+- **Session Auto-Recovery**: Client resumes active live broadcast session on server after app restarts.
+- **HLS Live & VOD**: Real-time HLS transcoding for live streaming + event archive playlists for time-shifted playback.
+- **Rich Dashboard & Player**: Playback speed selector (0.5x - 2x), live lag / latency status badges, buffering indicators, and multi-device filtering.
+

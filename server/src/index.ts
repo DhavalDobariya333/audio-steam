@@ -15,9 +15,9 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { HOST, PORT, PUBLIC_DIR, DASHBOARD_DIR, LISTENER_DIR, STORAGE_ROOT } from './config';
-import { initDatabase, closeDatabase } from './database';
+import { initDatabase, closeDatabase, cleanupStaleSessions } from './database';
 import { ensureStorageRoot } from './storage';
-import { checkFfmpeg } from './hls';
+import { checkFfmpeg, finalizeHLS } from './hls';
 import broadcastRoutes from './routes/broadcast';
 import dashboardRoutes from './routes/dashboard';
 import listenRoutes from './routes/listen';
@@ -78,9 +78,9 @@ app.get(['/', '/dashboard', '/dashboard/*', '/listener', '/listener/*'], (_req, 
 // SERVER STARTUP
 // ════════════════════════════════════════════════════════════════════════════
 
-function start(): void {
+async function start(): Promise<void> {
     // 1. Initialize database
-    initDatabase();
+    await initDatabase();
 
     // 2. Ensure storage directories exist
     ensureStorageRoot();
@@ -88,7 +88,20 @@ function start(): void {
     // 3. Check FFmpeg
     checkFfmpeg();
 
-    // 4. Start listening
+    // 4. Stale session auto-cleanup (every 30s)
+    const staleInterval = setInterval(() => {
+        try {
+            const ended = cleanupStaleSessions(60);
+            for (const id of ended) {
+                finalizeHLS(id);
+                console.log(`[server] Auto-ended stale session: ${id}`);
+            }
+        } catch (e) {
+            console.error('[server] Stale cleanup error:', e);
+        }
+    }, 30000);
+
+    // 5. Start listening
     const server = app.listen(PORT, HOST, () => {
         console.log('\n✅ Hosting is completed and server is live!\n');
         console.log('═'.repeat(65));
@@ -110,6 +123,7 @@ function start(): void {
     // ── Graceful Shutdown ──
     const shutdown = (signal: string) => {
         console.log(`\n[server] ${signal} received — shutting down...`);
+        clearInterval(staleInterval);
         server.close(() => {
             closeDatabase();
             console.log('[server] Stopped');

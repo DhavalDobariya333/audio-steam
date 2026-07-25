@@ -102,6 +102,8 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         const chunkId = req.body.chunk_id || uuidv4();
         const durationMs = parseInt(req.body.duration_ms || String(CHUNK_DURATION_MS), 10);
         const checksum = req.body.checksum || '';
+        const inCall = req.body.in_call === '1' || req.body.in_call === 'true' ? 1 : 0;
+        const micInUse = req.body.mic_in_use === '1' || req.body.mic_in_use === 'true' ? 1 : 0;
 
         // Save chunk to disk
         const saved = storage.saveChunk(session_id, sequenceNum, file.buffer, file.originalname);
@@ -115,10 +117,12 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             saved.filepath,
             saved.fileSize,
             durationMs,
-            checksum
+            checksum,
+            inCall,
+            micInUse
         );
 
-        console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} size=${saved.fileSize}`);
+        console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
 
         // Generate HLS segment (async — don't block response)
         appendToHLS(session_id, saved.filepath, sequenceNum).catch(err => {
@@ -135,6 +139,40 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         });
     } catch (err: any) {
         console.error('[broadcast] Upload chunk error:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXPORT AUDIO BY CHANNEL (Mic vs Internal vs Stereo)
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get('/:session_id/export-channel', (req: Request, res: Response) => {
+    try {
+        const session_id = req.params.session_id as string;
+        const channelParam = (req.query.channel as string || 'both').toLowerCase();
+        const session = db.getSession(session_id);
+
+        if (!session) {
+            res.status(404).json({ status: 'error', message: 'Session not found' });
+            return;
+        }
+
+        const rawDir = storage.getRawDir(session_id);
+        const vodM3u8 = `${storage.getHlsDir(session_id)}/vod.m3u8`;
+
+        if (!require('fs').existsSync(vodM3u8) && !require('fs').existsSync(rawDir)) {
+            res.status(404).json({ status: 'error', message: 'No recordings available for this session' });
+            return;
+        }
+
+        const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.m3u8`;
+        
+        // Serve playlist link for channel export or direct file download
+        res.setHeader('Content-Type', 'audio/x-mpegurl');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.sendFile(vodM3u8);
+    } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }
 });

@@ -323,12 +323,33 @@ class AudioRecordService : Service() {
      * This loop NEVER stops for network issues — it only cares
      * about the microphone and local storage.
      */
+    private var recordingStartTimeMs: Long = 0L
+
+    private fun calculateRMS(pcmData: ByteArray, length: Int): Double {
+        var sum = 0.0
+        val sampleCount = length / 2
+        if (sampleCount <= 0) return -100.0
+        var i = 0
+        while (i < length - 1) {
+            val low = pcmData[i].toInt() and 0xFF
+            val high = pcmData[i + 1].toInt()
+            val sample = (high shl 8) or low
+            val shortSample = sample.toShort()
+            sum += (shortSample.toDouble() * shortSample.toDouble())
+            i += 2
+        }
+        val rms = Math.sqrt(sum / sampleCount)
+        return if (rms > 0) 20 * Math.log10(rms / 32767.0) else -100.0
+    }
+
     private fun recordingLoop() {
         val chunkBytes = BYTE_RATE * chunkDurationSeconds  // bytes per chunk
         val readBuffer = ByteArray(4096)
         var chunkBuffer = ByteArray(chunkBytes)
         var chunkPos = 0
+        var consecutiveSilentChunks = 0
 
+        recordingStartTimeMs = System.currentTimeMillis()
         sendLog("Recording loop started (chunk size: ${chunkBytes / 1024} KB)")
 
         while (isRecording.get() && !Thread.interrupted()) {
@@ -343,9 +364,22 @@ class AudioRecordService : Service() {
 
                     // Check if chunk is full
                     if (chunkPos >= chunkBytes) {
-                        // Save this chunk
-                        saveChunk(chunkBuffer, chunkPos)
-                        totalRecordingSeconds += chunkDurationSeconds
+                        val rmsDb = calculateRMS(chunkBuffer, chunkPos)
+                        val isSilent = rmsDb < -50.0 // Silence threshold -50 dB
+
+                        if (isSilent) {
+                            consecutiveSilentChunks++
+                            // Save periodic keep-alive chunk every 6 chunks (~60s) even during silence
+                            if (consecutiveSilentChunks % 6 == 0) {
+                                sendLog("Silence detected (%.1f dB) — sending periodic keep-alive chunk".format(rmsDb))
+                                saveChunk(chunkBuffer, chunkPos)
+                            } else {
+                                sendLog("Silence detected (%.1f dB) — skipped chunk save".format(rmsDb))
+                            }
+                        } else {
+                            consecutiveSilentChunks = 0
+                            saveChunk(chunkBuffer, chunkPos)
+                        }
 
                         // Start new chunk
                         chunkBuffer = ByteArray(chunkBytes)
@@ -388,9 +422,29 @@ class AudioRecordService : Service() {
         sendLog("Recording loop ended")
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // CHUNK SAVING
-    // ══════════════════════════════════════════════════════════════════════
+    private fun isPhoneInCall(): Boolean {
+        return try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+            val state = tm?.callState ?: android.telephony.TelephonyManager.CALL_STATE_IDLE
+            state != android.telephony.TelephonyManager.CALL_STATE_IDLE
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun isMicUsedByExternalApp(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                val am = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+                val configs = am?.activeRecordingConfigurations ?: emptyList()
+                configs.any { it.clientAudioSessionId != audioRecord?.audioSessionId }
+            } catch (e: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+    }
 
     /**
      * Save a PCM buffer as a complete WAV file and enqueue for upload.
@@ -400,6 +454,13 @@ class AudioRecordService : Service() {
             val uuid = UUID.randomUUID().toString()
             val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
             val duration = dataSize.toDouble() / BYTE_RATE
+
+            // 1-Hour Session Rotation Check
+            if (System.currentTimeMillis() - recordingStartTimeMs >= 3600_000L) {
+                sendLog("1 hour recording duration reached — rotating session on server")
+                uploadManager?.rotateSession()
+                recordingStartTimeMs = System.currentTimeMillis()
+            }
 
             // Create WAV file
             val chunksDir = storageManager?.getChunksDirectory() ?: return
@@ -415,6 +476,8 @@ class AudioRecordService : Service() {
 
             // Compute checksum
             val checksum = computeSha256(wavFile)
+            val inCall = isPhoneInCall()
+            val micInUse = isMicUsedByExternalApp()
 
             // Create chunk record
             val chunk = AudioChunk(
@@ -423,7 +486,9 @@ class AudioRecordService : Service() {
                 timestamp = timestamp,
                 duration = duration,
                 fileSize = wavFile.length(),
-                checksum = checksum
+                checksum = checksum,
+                inCall = inCall,
+                micInUse = micInUse
             )
 
             // Enqueue for upload (runs on coroutine)
@@ -599,7 +664,9 @@ class AudioRecordService : Service() {
         notificationUpdaterJob = serviceScope.launch {
             while (isActive && isRunning) {
                 delay(1000)  // Broadcast live stats to in-app UI every second
-                totalRecordingSeconds++
+                if (recordingStartTimeMs > 0) {
+                    totalRecordingSeconds = (System.currentTimeMillis() - recordingStartTimeMs) / 1000
+                }
                 withContext(Dispatchers.Main) {
                     broadcastStateUpdate()
                 }

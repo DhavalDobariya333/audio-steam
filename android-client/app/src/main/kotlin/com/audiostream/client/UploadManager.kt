@@ -170,6 +170,37 @@ class UploadManager(
     private fun ensureSession(): String? {
         val current = activeSessionId
         if (current != null) return current
+
+        // 1. Try to recover existing active session for this client
+        try {
+            val activeUrl = serverUrl.trimEnd('/') + "/api/v1/listen/active"
+            val request = Request.Builder().url(activeUrl).get().build()
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string() ?: ""
+            response.close()
+
+            if (response.isSuccessful) {
+                val json = JSONObject(body)
+                val sessionsArray = json.optJSONArray("sessions")
+                if (sessionsArray != null) {
+                    for (i in 0 until sessionsArray.length()) {
+                        val s = sessionsArray.getJSONObject(i)
+                        if (s.optString("client_name") == clientName) {
+                            val recoveredId = s.optString("session_id")
+                            if (recoveredId.isNotEmpty()) {
+                                activeSessionId = recoveredId
+                                onLog("Recovered active session from server: $recoveredId")
+                                return recoveredId
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore recovery failure and proceed to creation
+        }
+
+        // 2. Create new session if no active session recovered
         return try {
             val createUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts"
             val jsonBody = JSONObject().apply {
@@ -203,6 +234,12 @@ class UploadManager(
             onLog("Session creation error: ${e.message}")
             null
         }
+    }
+
+    fun rotateSession() {
+        val oldSessionId = activeSessionId
+        activeSessionId = null
+        onLog("Rotated session after 1 hour (Old: $oldSessionId)")
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -239,6 +276,8 @@ class UploadManager(
                 .addFormDataPart("chunk_id", chunk.uuid)
                 .addFormDataPart("duration_ms", (chunk.duration * 1000).toInt().toString())
                 .addFormDataPart("checksum", chunk.checksum)
+                .addFormDataPart("in_call", if (chunk.inCall) "1" else "0")
+                .addFormDataPart("mic_in_use", if (chunk.micInUse) "1" else "0")
                 .build()
 
             val request = Request.Builder()

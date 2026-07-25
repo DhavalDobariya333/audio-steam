@@ -53,7 +53,13 @@ data class AudioChunk(
     val createdAt: Long = System.currentTimeMillis(),
 
     @ColumnInfo(name = "last_attempt_at")
-    val lastAttemptAt: Long = 0
+    val lastAttemptAt: Long = 0,
+
+    @ColumnInfo(name = "in_call")
+    val inCall: Boolean = false,
+
+    @ColumnInfo(name = "mic_in_use")
+    val micInUse: Boolean = false
 )
 
 
