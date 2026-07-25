@@ -259,12 +259,8 @@ class UploadManager(
                         false
                     }
                 }
-            } else {
-                onLog("Upload failed: HTTP ${response.code}")
-                dao.markFailed(chunk.uuid)
-                updateStats()
-                false
             }
+        } catch (e: Exception) {
             onLog("Upload error: ${e.message}")
             dao.markFailed(chunk.uuid)
             updateStats()
