@@ -170,7 +170,8 @@ function updateActiveSessions(sessions) {
         sessions.forEach(s => {
             const opt = document.createElement('option');
             opt.value = s.session_id;
-            opt.textContent = `🟢 ${s.client_name} (LIVE)`;
+            const dev = s.device_info ? ` — ${s.device_info}` : '';
+            opt.textContent = `🟢 ${s.client_name}${dev} (LIVE)`;
             ui.select.appendChild(opt);
         });
         ui.select.disabled = false;
@@ -377,6 +378,7 @@ function renderSessionsList() {
                             <span class="badge badge--${statusClass}">${badgeText}</span>
                         </div>
                         <div class="session-card__meta">
+                            <span>📱 ${s.device_info || 'Android Device'}</span>
                             <span>⏱ ${duration}</span>
                             <span>📦 ${s.total_chunks || 0} chunks</span>
                             <span>💾 ${sizeStr}</span>

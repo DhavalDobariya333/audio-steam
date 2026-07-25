@@ -136,14 +136,33 @@ class AudioRecordService : Service() {
     // SERVICE LIFECYCLE
     // ══════════════════════════════════════════════════════════════════════
 
+    private fun getBatteryInfo(): String {
+        return try {
+            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val batteryStatus = registerReceiver(null, filter)
+            val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+            val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                             status == android.os.BatteryManager.BATTERY_STATUS_FULL
+            val level = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()).toInt() else -1
+            val icon = if (isCharging) "⚡" else "🔋"
+            val stateStr = if (isCharging) "Charging" else "Discharging"
+            if (pct >= 0) "$icon $pct% ($stateStr)" else "$icon Unknown"
+        } catch (e: Exception) {
+            "🔋 Battery --%"
+        }
+    }
+
     private fun startMonitoring(url: String) {
         if (isRunning) return
 
         serverUrl = url
 
-        // Generate client name from device info
+        // Generate client name and include battery level & charging state in device info
         clientName = generateClientName()
-        deviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})"
+        val batteryStatus = getBatteryInfo()
+        deviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} | $batteryStatus"
 
         // 1. Create notification channel and start foreground
         createNotificationChannel()
