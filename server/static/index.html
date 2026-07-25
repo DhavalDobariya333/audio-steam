@@ -3,108 +3,209 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Audio Stream Dashboard</title>
-    
+    <title>Audio Monitor — Dashboard</title>
+    <meta name="description" content="Real-time audio monitoring dashboard. View connected clients, uploaded recordings, and playback audio chunks.">
+    <meta name="theme-color" content="#08080f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <!-- Google Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
     <!-- CSS -->
     <link rel="stylesheet" href="style.css">
-    
-    <!-- Favicon (Emoji) -->
+
+    <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
 </head>
 <body>
 
-    <div class="app">
-        
-        <!-- Header -->
-        <header class="header">
-            <h1 class="header__title">Live Audio Monitor</h1>
-            <p class="header__subtitle">Android Termux Streaming Architecture</p>
+    <div class="app" id="app">
+
+        <!-- Top Bar -->
+        <header class="topbar">
+            <div class="topbar__left">
+                <h1 class="topbar__title">Audio Monitor</h1>
+                <span class="topbar__status" id="connection-dot">
+                    <span class="dot dot--pulse"></span>
+                    <span id="status-text">Connecting</span>
+                </span>
+            </div>
+            <button class="topbar__action" id="btn-refresh" aria-label="Refresh" title="Refresh data">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
         </header>
 
-        <!-- Status Bar -->
-        <div class="status-bar">
-            <div class="status-item" title="Connection to Server">
-                <div id="conn-dot" class="status-dot"></div>
-                <span id="conn-status" class="connection-badge connection-badge--disconnected">Disconnected</span>
+        <!-- Quick Stats — Horizontal scroll on mobile -->
+        <div class="stats-row" id="stats-row">
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-online">0</span>
+                <span class="stat-chip__label">Online</span>
             </div>
-            
-            <div class="status-item" title="Active Audio Senders (Android Apps)">
-                <span>🎙️ Streamers:</span>
-                <span id="streamer-count" class="status-value">0</span>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-recordings">0</span>
+                <span class="stat-chip__label">Recordings</span>
             </div>
-            
-            <div class="status-item" title="Active Dashboard Viewers">
-                <span>👂 Listeners:</span>
-                <span id="listener-count" class="status-value">0</span>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-duration">00:00</span>
+                <span class="stat-chip__label">Duration</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-storage">0 B</span>
+                <span class="stat-chip__label">Used</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-free">—</span>
+                <span class="stat-chip__label">Free</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-uploads-hour">0</span>
+                <span class="stat-chip__label">Uploads/hr</span>
             </div>
         </div>
 
-        <!-- Live Visualizer Card -->
-        <section class="card">
-            <header class="card__header">
-                <h2 class="card__title">Live Signal</h2>
-                <div class="controls" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                    <button id="btn-connect" class="btn btn--primary">
-                        Connect
-                    </button>
-                    <button id="btn-mute" class="btn btn--secondary" title="Mute or Unmute live audio playback">
-                        🔊 Live Sound: ON
-                    </button>
-                    <div style="display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem;">
-                        <span>🎚️ Gain:</span>
-                        <input type="range" id="gain-slider" min="1" max="5" step="0.5" value="1" style="width: 75px; cursor: pointer;">
-                        <span id="gain-val" style="font-weight: 600; color: #4CAF50; min-width: 32px;">1.0x</span>
-                    </div>
-                    <button id="btn-record" class="btn btn--primary" disabled>
-                        Record Audio
+        <!-- Tab Navigation -->
+        <nav class="tab-nav" id="tab-nav">
+            <button class="tab-nav__btn tab-nav__btn--active" data-tab="recordings">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+                Recordings
+            </button>
+            <button class="tab-nav__btn" data-tab="clients">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                Clients
+            </button>
+            <button class="tab-nav__btn" data-tab="activity">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                Activity
+            </button>
+        </nav>
+
+        <!-- TAB: Recordings -->
+        <section class="tab-panel tab-panel--active" id="panel-recordings">
+
+            <!-- Compact Filters -->
+            <div class="filter-row" id="filter-row">
+                <div class="search-box">
+                    <svg class="search-box__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" id="filter-search" class="search-box__input" placeholder="Search recordings..." title="Search recordings">
+                </div>
+                <button class="filter-toggle" id="btn-filter-toggle" aria-label="Filters" title="Show filters">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                </button>
+            </div>
+
+            <!-- Expandable Filter Panel -->
+            <div class="filter-panel" id="filter-panel">
+                <select id="filter-client" class="filter-select" title="Filter by client">
+                    <option value="">All Clients</option>
+                </select>
+                <input type="date" id="filter-date" class="filter-select" title="Filter by date">
+                <select id="filter-sort" class="filter-select" title="Sort order">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="largest">Largest First</option>
+                    <option value="longest">Longest First</option>
+                </select>
+                <div class="filter-panel__actions">
+                    <select id="export-minutes" class="filter-select" title="Select combined audio length">
+                        <option value="1">1 Min</option>
+                        <option value="5" selected>5 Min</option>
+                        <option value="15">15 Min</option>
+                        <option value="30">30 Min</option>
+                        <option value="0">All</option>
+                    </select>
+                    <button id="btn-export-combined" class="btn btn--accent btn--sm">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Download Merged
                     </button>
                 </div>
-            </header>
-            
-            <!-- Waveform Canvas -->
-            <div class="waveform-container">
-                <canvas id="waveform-canvas"></canvas>
-                <!-- Overlay shown when no stream is active -->
-                <div id="waveform-overlay" class="waveform-overlay">
-                    Waiting for audio stream...
-                </div>
             </div>
-            
-            <!-- Real-time Volume Bar -->
-            <div class="volume-bar">
-                <div id="volume-fill" class="volume-bar__fill"></div>
+
+            <!-- Storage Bar -->
+            <div class="storage-bar" id="storage-info">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                <span>Loading...</span>
             </div>
-            
-            <!-- Active Recording Indicator -->
-            <div id="record-timer" class="recording-timer">
-                <div class="recording-timer__dot"></div>
-                <div class="recording-timer__text">Recording in progress</div>
-                <div id="record-time" class="recording-timer__time">00:00</div>
+
+            <!-- Recordings List -->
+            <ul id="recordings-list" class="rec-list">
+                <li class="empty-state">Loading recordings...</li>
+            </ul>
+
+            <!-- Load More -->
+            <div class="load-more" id="load-more" style="display:none;">
+                <button id="btn-load-more" class="btn btn--ghost">Load More</button>
             </div>
         </section>
 
-        <!-- Saved Recordings Card -->
-        <section class="card">
-            <header class="card__header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <h2 class="card__title">Saved Recordings</h2>
-                <div id="storage-info" class="connection-badge" style="font-size: 0.85rem; font-weight: 500;">
-                    💾 Recordings: 0 MB | Free Disk: Checking...
-                </div>
-            </header>
-            
-            <ul id="recordings-list" class="recordings-list">
-                <!-- Dynamically populated via JS -->
-                <li class="recordings-list__empty">Loading recordings...</li>
-            </ul>
+        <!-- TAB: Clients -->
+        <section class="tab-panel" id="panel-clients">
+            <div class="section-head">
+                <span id="client-count-badge">0 clients</span>
+            </div>
+            <div class="clients-list" id="clients-grid">
+                <div class="empty-state">No clients connected yet</div>
+            </div>
+        </section>
+
+        <!-- TAB: Activity -->
+        <section class="tab-panel" id="panel-activity">
+            <div class="section-head">
+                <span class="live-badge" id="activity-live">
+                    <span class="dot dot--pulse"></span>
+                    Live Feed
+                </span>
+            </div>
+            <div class="activity-feed" id="activity-feed">
+                <div class="empty-state">Waiting for uploads...</div>
+            </div>
         </section>
 
     </div>
 
-    <!-- Toast Notifications Container -->
+    <!-- Sticky Bottom Player -->
+    <div class="bottom-player" id="bottom-player">
+        <div class="bottom-player__progress">
+            <div class="bottom-player__progress-fill" id="playback-progress"></div>
+        </div>
+        <div class="bottom-player__content">
+            <div class="bottom-player__info">
+                <div class="bottom-player__title" id="now-playing-title">Not playing</div>
+                <div class="bottom-player__time" id="playback-time">0:00 / 0:00</div>
+            </div>
+            <div class="bottom-player__controls">
+                <button class="player-btn" id="btn-autoplay" aria-label="Toggle auto-play" title="Toggle auto-play">
+                    <svg id="icon-play" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <svg id="icon-pause" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                </button>
+                <button class="player-btn" id="btn-skip" aria-label="Skip" title="Skip track" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg>
+                </button>
+                <span class="queue-badge" id="queue-count-badge">0</span>
+            </div>
+        </div>
+        <audio id="audio-player" preload="auto"></audio>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal" id="delete-modal">
+            <div class="modal__icon">🗑️</div>
+            <div class="modal__title">Delete Recording?</div>
+            <div class="modal__desc" id="modal-filename"></div>
+            <div class="modal__actions">
+                <button class="btn btn--ghost" id="modal-cancel">Cancel</button>
+                <button class="btn btn--danger" id="modal-confirm">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
     <!-- Scripts -->
-    <script src="waveform.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

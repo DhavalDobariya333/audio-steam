@@ -1,18 +1,20 @@
 """
-utils.py — Shared constants, configuration, and utility functions.
+utils.py — Shared configuration, constants, and utility functions.
 
-This module centralizes all configuration values so they can be imported
-by any other module without circular dependencies. It also sets up
-structured logging for the entire server.
+Centralizes all configuration so any module can import without
+circular dependencies. Also provides logging setup, formatting
+helpers, and security utilities.
 
-Audio Format:
-    16 kHz sample rate, 1 channel (mono), 16-bit signed PCM (little-endian).
-    This yields ~32 KB/s of raw audio — ideal for speech over mobile networks.
+Audio Format (matches Android client):
+    16 kHz sample rate, 1 channel (mono), 16-bit signed PCM.
+    ~312 KB per 10-second WAV chunk.
 """
 
 import os
-import logging
+import re
 import time
+import hashlib
+import logging
 from pathlib import Path
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -20,117 +22,79 @@ from pathlib import Path
 # ══════════════════════════════════════════════════════════════════════════════
 
 SAMPLE_RATE = 16000          # 16 kHz — good for speech, low bandwidth
-NUM_CHANNELS = 1             # Mono — halves data vs stereo
-BITS_PER_SAMPLE = 16         # 16-bit — standard quality
+NUM_CHANNELS = 1             # Mono
+BITS_PER_SAMPLE = 16         # 16-bit
 BYTES_PER_SAMPLE = BITS_PER_SAMPLE // 8   # 2 bytes per sample
-BLOCK_ALIGN = NUM_CHANNELS * BYTES_PER_SAMPLE  # 2 bytes per block
-BYTE_RATE = SAMPLE_RATE * BLOCK_ALIGN          # 32,000 bytes/second
+BLOCK_ALIGN = NUM_CHANNELS * BYTES_PER_SAMPLE  # 2
+BYTE_RATE = SAMPLE_RATE * BLOCK_ALIGN          # 32,000 bytes/sec
 
-# WAV file header is always 44 bytes for PCM format
-WAV_HEADER_SIZE = 44
+WAV_HEADER_SIZE = 44         # Standard PCM WAV header
 
-# Recommended chunk size for streaming:
-# 1024 samples × 2 bytes = 2048 bytes per chunk
-# At 16kHz, this is 64ms of audio — good balance of latency vs overhead
-CHUNK_SAMPLES = 1024
-CHUNK_BYTES = CHUNK_SAMPLES * BYTES_PER_SAMPLE
-CHUNK_DURATION_MS = (CHUNK_SAMPLES / SAMPLE_RATE) * 1000  # ~64ms
+# Default chunk duration in seconds
+DEFAULT_CHUNK_DURATION = 10
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVER CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Host and port — bind to all interfaces so Cloudflare Tunnel can reach us
 HOST = os.getenv("AUDIO_HOST", "0.0.0.0")
 PORT = int(os.getenv("AUDIO_PORT", "8765"))
 
-# Directory where WAV recordings are saved
-# Resolves to: <project_root>/recordings/
-RECORDINGS_DIR = Path(__file__).parent.parent / "recordings"
+# Base directory for all recordings: <project_root>/recordings/
+BASE_DIR = Path(__file__).parent.parent
+RECORDINGS_DIR = BASE_DIR / "recordings"
 
-# Maximum simultaneous streamer connections (prevent abuse)
-MAX_STREAMERS = 5
+# SQLite database file
+DATABASE_PATH = BASE_DIR / "server" / "audio_monitor.db"
 
-# Maximum simultaneous listener connections
-MAX_LISTENERS = 20
+# Maximum upload size: 10 MB (generous for 10-second 16kHz WAV ≈ 312 KB)
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
 
-# Maximum recording duration in seconds (1 hour) — prevents disk fill
-MAX_RECORDING_SECONDS = 3600
+# Rate limiting: max uploads per minute per client
+MAX_UPLOADS_PER_MINUTE = 60
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LOGGING SETUP
+# LOGGING
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 def setup_logging(level: str = "INFO") -> None:
-    """
-    Configure structured logging for the entire application.
-
-    Uses a consistent format with timestamps and module names.
-    Call this once at startup (in main.py).
-
-    Args:
-        level: Logging level string ("DEBUG", "INFO", "WARNING", "ERROR").
-    """
+    """Configure structured logging for the entire application."""
     log_level = getattr(logging, level.upper(), logging.INFO)
-
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s │ %(name)-12s │ %(levelname)-7s │ %(message)s",
         datefmt="%H:%M:%S",
-        force=True,  # Override any existing config
+        force=True,
     )
-
-    # Suppress noisy uvicorn access logs (they flood the terminal)
+    # Suppress noisy uvicorn access logs
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Get a named logger. Use this instead of logging.getLogger() directly
-    so all loggers share the same formatting.
-
-    Args:
-        name: Module name (e.g., "websocket", "recorder").
-
-    Returns:
-        Configured Logger instance.
-    """
+    """Get a named logger."""
     return logging.getLogger(name)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# UTILITY FUNCTIONS
+# FORMATTING HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 def timestamp() -> str:
-    """
-    Generate a filesystem-safe timestamp string.
-    Example: "20260721_211500"
-    """
+    """Generate a filesystem-safe timestamp. Example: '20260722_203000'"""
     return time.strftime("%Y%m%d_%H%M%S")
 
 
 def format_duration(seconds: float) -> str:
     """
-    Format a duration in seconds to a human-readable string.
-
-    Examples:
-        format_duration(65.3)  → "01:05"
-        format_duration(3723)  → "01:02:03"
-
-    Args:
-        seconds: Duration in seconds.
-
-    Returns:
-        Formatted duration string (MM:SS or HH:MM:SS).
+    Format seconds to human-readable duration.
+    Examples: 65.3 → '01:05', 3723 → '01:02:03'
     """
     seconds = max(0, int(seconds))
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
-
     if hours > 0:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
@@ -138,32 +102,67 @@ def format_duration(seconds: float) -> str:
 
 def format_size(size_bytes: int) -> str:
     """
-    Format a byte count to a human-readable size string.
-
-    Examples:
-        format_size(1024)     → "1.0 KB"
-        format_size(1572864)  → "1.5 MB"
-
-    Args:
-        size_bytes: Size in bytes.
-
-    Returns:
-        Formatted size string.
+    Format bytes to human-readable size.
+    Examples: 1024 → '1.0 KB', 1572864 → '1.5 MB'
     """
     if size_bytes < 1024:
         return f"{size_bytes} B"
     elif size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
-    else:
+    elif size_bytes < 1024 * 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def ensure_recordings_dir() -> Path:
+# ══════════════════════════════════════════════════════════════════════════════
+# SECURITY & VALIDATION HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def compute_sha256(filepath: Path) -> str:
+    """Compute SHA-256 checksum of a file."""
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for block in iter(lambda: f.read(8192), b""):
+            sha256.update(block)
+    return sha256.hexdigest()
+
+
+def compute_sha256_bytes(data: bytes) -> str:
+    """Compute SHA-256 checksum of bytes."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def sanitize_client_name(name: str) -> str:
     """
-    Create the recordings directory if it doesn't exist.
-
-    Returns:
-        Path to the recordings directory.
+    Sanitize a client name for safe use as a directory name.
+    Removes special characters, limits length, prevents traversal attacks.
     """
-    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-    return RECORDINGS_DIR
+    if not name:
+        return "unknown"
+    # Keep only alphanumeric, hyphens, underscores
+    sanitized = re.sub(r'[^a-zA-Z0-9_\-]', '_', name.strip())
+    # Remove leading/trailing underscores/hyphens
+    sanitized = sanitized.strip('_-')
+    # Limit length
+    sanitized = sanitized[:64] if sanitized else "unknown"
+    # Prevent reserved names
+    if sanitized.lower() in ('.', '..', 'con', 'nul', 'prn', 'aux'):
+        sanitized = f"client_{sanitized}"
+    return sanitized
+
+
+def validate_uuid(uuid_str: str) -> bool:
+    """Validate UUID format (loose — accepts UUID v4 and similar)."""
+    if not uuid_str or len(uuid_str) > 64:
+        return False
+    # Accept standard UUID format and simple hex strings
+    pattern = r'^[a-fA-F0-9\-]{8,64}$'
+    return bool(re.match(pattern, uuid_str))
+
+
+def ensure_dir(path: Path) -> Path:
+    """Create a directory (and parents) if it doesn't exist."""
+    path.mkdir(parents=True, exist_ok=True)
+    return path

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Stream — Host Dashboard</title>
+    <meta name="description" content="Manage your live audio broadcasts. View active sessions, past recordings, and storage usage.">
+    <meta name="theme-color" content="#08080f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📡</text></svg>">
+</head>
+<body>
+
+    <div class="app" id="app">
+
+        <!-- Top Bar -->
+        <header class="topbar">
+            <div class="topbar__left">
+                <h1 class="topbar__title">Audio Stream</h1>
+                <span class="topbar__status" id="connection-dot">
+                    <span class="dot dot--pulse"></span>
+                    <span id="status-text">Connecting</span>
+                </span>
+            </div>
+            <button class="topbar__action" id="btn-refresh" aria-label="Refresh" title="Refresh data">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
+        </header>
+
+        <!-- Quick Stats -->
+        <div class="stats-row" id="stats-row">
+            <div class="stat-chip stat-chip--accent">
+                <span class="stat-chip__value" id="stat-active">0</span>
+                <span class="stat-chip__label">Live Now</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-sessions">0</span>
+                <span class="stat-chip__label">Sessions</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-chunks">0</span>
+                <span class="stat-chip__label">Chunks</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-duration">00:00</span>
+                <span class="stat-chip__label">Duration</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-storage">0 B</span>
+                <span class="stat-chip__label">Used</span>
+            </div>
+            <div class="stat-chip">
+                <span class="stat-chip__value" id="stat-free">—</span>
+                <span class="stat-chip__label">Free</span>
+            </div>
+        </div>
+
+        <!-- Active Sessions Banner -->
+        <div class="live-banner" id="live-banner" style="display:none;">
+            <div class="live-banner__dot"></div>
+            <span class="live-banner__text">
+                <strong id="live-count">0</strong> session(s) broadcasting live
+            </span>
+            <a href="/listener/" class="live-banner__link">Open Listener →</a>
+        </div>
+
+        <!-- Sessions List -->
+        <section class="section">
+            <div class="section__head">
+                <h2 class="section__title">Broadcast Sessions</h2>
+                <span class="section__count" id="session-count">0 sessions</span>
+            </div>
+
+            <ul class="session-list" id="session-list">
+                <li class="empty-state">Loading sessions...</li>
+            </ul>
+
+            <div class="load-more" id="load-more" style="display:none;">
+                <button class="btn btn--ghost" id="btn-load-more">Load More</button>
+            </div>
+        </section>
+
+    </div>
+
+    <!-- Delete Modal -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal" id="delete-modal">
+            <div class="modal__icon">🗑️</div>
+            <div class="modal__title">Delete Session?</div>
+            <div class="modal__desc">This will permanently delete all audio chunks, HLS segments, and metadata for this session.</div>
+            <div class="modal__session-id" id="modal-session-id"></div>
+            <div class="modal__actions">
+                <button class="btn btn--ghost" id="modal-cancel">Cancel</button>
+                <button class="btn btn--danger" id="modal-confirm">Delete Permanently</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toasts -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: audio-stream-server
+    env: docker
+    plan: free # Note: The free plan does not support persistent disks
+    dockerfilePath: ./Dockerfile
+      
+    envVars:
+      - key: PORT
+        value: 8765
+      - key: HOST
+        value: 0.0.0.0

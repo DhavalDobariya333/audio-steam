@@ -1,23 +1,54 @@
-# Byte-compiled / optimized / DLL files
+# Node / JS
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
 
-# Recordings directory
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Server data
 recordings/
-*.wav
+*.db
+*.db-wal
+*.db-shm
 
-# Android build artifacts & downloaded tools
+# Android
 android-client/.gradle/
-android-client/.tools/
-android-client/build/
 android-client/app/build/
-android-client/.idea/
+android-client/build/
 android-client/local.properties
-*.apk
-*.zip
+android-client/.tools/
+!*.apk
+*.aab
+*.keystore
+*.jks
 
-# OS / Editor generated files
+# Secrets
+.env
+.env.*
+
+# OS
 .DS_Store
 Thumbs.db
-*.log
+*.swp
+*.swo
+
+# Archives
+*.zip

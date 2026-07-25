@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Stream — Live Listener</title>
+    <meta name="description" content="Listen to live audio broadcasts with DVR capabilities.">
+    <meta name="theme-color" content="#08080f">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- HLS.js for Safari/Chrome compatibility -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎧</text></svg>">
+</head>
+<body>
+
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <h1 class="header__title">Live Listener</h1>
+            <div class="header__status" id="status-indicator">
+                <span class="dot dot--offline"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </header>
+
+        <!-- Session Selector -->
+        <div class="session-selector">
+            <label for="session-select" class="session-selector__label">Select Broadcast</label>
+            <div class="select-wrapper">
+                <select id="session-select" class="select" disabled>
+                    <option value="">Searching for live sessions...</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Player Card -->
+        <div class="player-card" id="player-card">
+            <!-- Visualizer -->
+            <div class="visualizer-container" id="visualizer-container">
+                <canvas id="visualizer" width="600" height="150"></canvas>
+                <div class="visualizer-overlay" id="visualizer-overlay">
+                    <span>Ready to Play</span>
+                </div>
+            </div>
+
+            <!-- Track Info -->
+            <div class="track-info">
+                <h2 class="track-info__title" id="track-title">No session selected</h2>
+                <div class="track-info__meta" id="track-meta">—</div>
+            </div>
+
+            <!-- Progress/DVR -->
+            <div class="progress-area">
+                <div class="progress-bar" id="progress-bar-container">
+                    <div class="progress-bar__buffer" id="progress-buffer"></div>
+                    <div class="progress-bar__fill" id="progress-fill"></div>
+                </div>
+                <div class="time-row">
+                    <span id="time-current">0:00</span>
+                    <span id="time-total" class="live-tag">LIVE</span>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="controls">
+                <button class="btn btn--icon" id="btn-rewind" title="Rewind 15s" disabled>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5"/><path d="M18 17l-5-5 5-5"/></svg>
+                </button>
+                <button class="btn btn--play" id="btn-play" disabled>
+                    <svg id="icon-play" width="32" height="32" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <svg id="icon-pause" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                </button>
+                <button class="btn btn--icon" id="btn-jump-live" title="Jump to Live" disabled>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <audio id="audio-player" crossorigin="anonymous"></audio>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
