@@ -135,7 +135,7 @@ interface ChunkDao {
 // DATABASE
 // ══════════════════════════════════════════════════════════════════════════════
 
-@Database(entities = [AudioChunk::class], version = 1, exportSchema = false)
+@Database(entities = [AudioChunk::class], version = 2, exportSchema = false)
 abstract class ChunkDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
 
