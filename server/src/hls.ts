@@ -19,6 +19,11 @@ import fs from 'fs';
 import path from 'path';
 import { getHlsDir } from './storage';
 import { HLS_SEGMENT_DURATION, HLS_LIST_SIZE } from './config';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import ffprobeInstaller from '@ffprobe-installer/ffprobe';
+
+const FFMPEG_PATH = ffmpegInstaller.path;
+const FFPROBE_PATH = ffprobeInstaller.path;
 
 // ════════════════════════════════════════════════════════════════════════════
 // FFMPEG AVAILABILITY CHECK
@@ -28,14 +33,13 @@ let ffmpegAvailable = false;
 
 export function checkFfmpeg(): boolean {
     try {
-        execSync('ffmpeg -version', { stdio: 'ignore' });
+        execSync(`"${FFMPEG_PATH}" -version`, { stdio: 'ignore' });
         ffmpegAvailable = true;
-        console.log('[hls] FFmpeg found');
+        console.log('[hls] FFmpeg found via static binary');
         return true;
-    } catch {
+    } catch (e) {
         ffmpegAvailable = false;
-        console.warn('[hls] FFmpeg NOT found — HLS generation disabled');
-        console.warn('[hls] Install FFmpeg to enable live streaming');
+        console.error('[hls] FFmpeg static binary failed to run:', e);
         return false;
     }
 }
@@ -92,7 +96,7 @@ export async function appendToHLS(
     let segDuration = HLS_SEGMENT_DURATION;
     try {
         const probe = execSync(
-            `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${segmentPath}"`,
+            `"${FFPROBE_PATH}" -v quiet -show_entries format=duration -of csv=p=0 "${segmentPath}"`,
             { encoding: 'utf-8' }
         ).trim();
         const parsed = parseFloat(probe);
@@ -252,7 +256,7 @@ export function finalizeHLS(sessionId: string): void {
 
 function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-        const proc = spawn('ffmpeg', args, {
+        const proc = spawn(FFMPEG_PATH, args, {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
