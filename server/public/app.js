@@ -66,6 +66,10 @@ const ui = {
     btnRefresh: document.getElementById('btn-refresh'),
     clientFilter: document.getElementById('client-filter'),
     
+    // Remote Control
+    btnRemoteStart: document.getElementById('btn-remote-start'),
+    btnRemoteStop: document.getElementById('btn-remote-stop'),
+    
     // View tabs
     tabAll: document.getElementById('tab-all'),
     tabPlayer: document.getElementById('tab-player'),
@@ -118,6 +122,9 @@ function bindEvents() {
     if (ui.clientFilter) {
         ui.clientFilter.addEventListener('change', () => renderSessionsList());
     }
+    
+    if (ui.btnRemoteStart) ui.btnRemoteStart.addEventListener('click', () => sendRemoteCommand('START'));
+    if (ui.btnRemoteStop) ui.btnRemoteStop.addEventListener('click', () => sendRemoteCommand('STOP'));
     
     ui.audio.addEventListener('play', () => {
         setPlayingState(true);
@@ -537,6 +544,43 @@ function formatSize(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// REMOTE CONTROL COMMANDS
+// ════════════════════════════════════════════════════════════════════════════
+
+async function sendRemoteCommand(command) {
+    const sessionId = ui.select.value;
+    if (!sessionId) {
+        showToast('Please select a device from the dropdown first', true);
+        return;
+    }
+    
+    const session = state.sessions.find(s => s.session_id === sessionId) || state.dashboardSessions.find(s => s.session_id === sessionId);
+    if (!session || !session.client_name) {
+        showToast('Could not determine client device name', true);
+        return;
+    }
+    
+    const clientId = session.client_name;
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/remote-command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId, command })
+        });
+        if (res.ok) {
+            showToast(`Sent ${command} signal to ${clientId}`);
+        } else {
+            const err = await res.json();
+            showToast(`Error: ${err.message}`, true);
+        }
+    } catch (e) {
+        console.error('Remote command error:', e);
+        showToast('Failed to send remote command', true);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

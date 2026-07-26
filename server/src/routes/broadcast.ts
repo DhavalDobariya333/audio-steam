@@ -232,4 +232,48 @@ router.get('/:session_id', (req: Request, res: Response) => {
     }
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// REMOTE CONTROL COMMANDS
+// ════════════════════════════════════════════════════════════════════════════
+
+router.post('/remote-command', (req: Request, res: Response) => {
+    try {
+        const { client_id, command } = req.body;
+        if (!client_id || !command) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id or command' });
+            return;
+        }
+
+        db.setDeviceCommand(client_id, command);
+        console.log(`[broadcast] Remote command set for ${client_id}: ${command}`);
+        
+        res.json({ status: 'success', client_id, command });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+router.get('/command', (req: Request, res: Response) => {
+    try {
+        const client_id = req.query.client_id as string;
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+
+        const cmd = db.getDeviceCommand(client_id);
+        const commandStr = cmd ? cmd.command : 'NONE';
+        
+        // If a command was fetched (START or STOP), clear it so we don't trigger it again endlessly
+        if (commandStr === 'START' || commandStr === 'STOP') {
+             db.clearDeviceCommand(client_id);
+             console.log(`[broadcast] Remote command consumed by ${client_id}: ${commandStr}`);
+        }
+
+        res.json({ command: commandStr });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 export default router;

@@ -99,6 +99,17 @@
         android:backgroundTint="#f87171"
         android:textColor="#FFFFFF"
         android:visibility="gone"
+        android:layout_marginBottom="8dp"/>
+
+    <Button
+        android:id="@+id/btnStandby"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="📡 ENABLE REMOTE LISTENING"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:backgroundTint="#1a1a2e"
+        android:textColor="#a78bfa"
         android:layout_marginBottom="16dp"/>
 
     <!-- Stats Grid -->

@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etServerUrl: EditText
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
+    private lateinit var btnStandby: Button
     private lateinit var tvStatus: TextView
     private lateinit var vStatusDot: View
     private lateinit var tvConnection: TextView
@@ -88,6 +89,7 @@ class MainActivity : AppCompatActivity() {
         etServerUrl = findViewById(R.id.etServerUrl)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
+        btnStandby = findViewById(R.id.btnStandby)
         tvStatus = findViewById(R.id.tvStatus)
         vStatusDot = findViewById(R.id.vStatusDot)
         tvConnection = findViewById(R.id.tvConnection)
@@ -112,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         // Button handlers
         btnStart.setOnClickListener { startService() }
         btnStop.setOnClickListener { stopService() }
+        btnStandby.setOnClickListener { toggleStandby() }
 
         // Register broadcast receiver
         val filter = IntentFilter().apply {
@@ -218,27 +221,65 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUIForServiceState(running: Boolean) {
         if (running) {
-            tvStatus.text = "● Recording Active"
-            tvStatus.setTextColor(Color.parseColor("#34d399"))
-            vStatusDot.setBackgroundColor(Color.parseColor("#34d399"))
             btnStart.visibility = View.GONE
+            btnStandby.visibility = View.GONE
             btnStop.visibility = View.VISIBLE
+            tvStatus.text = "● Recording"
+            tvStatus.setTextColor(Color.parseColor("#10b981"))
+            vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
+            etServerUrl.isEnabled = false
+        } else if (CommandPollingService.isPolling) {
+            btnStart.visibility = View.VISIBLE
+            btnStandby.text = "⏹ STOP LISTENING"
+            btnStandby.visibility = View.VISIBLE
+            btnStop.visibility = View.GONE
+            tvStatus.text = "📡 Standby Mode"
+            tvStatus.setTextColor(Color.parseColor("#a78bfa"))
+            vStatusDot.setBackgroundColor(Color.parseColor("#a78bfa"))
             etServerUrl.isEnabled = false
         } else {
+            btnStart.visibility = View.VISIBLE
+            btnStandby.text = "📡 ENABLE REMOTE LISTENING"
+            btnStandby.visibility = View.VISIBLE
+            btnStop.visibility = View.GONE
             tvStatus.text = "○ Stopped"
             tvStatus.setTextColor(Color.parseColor("#f87171"))
             vStatusDot.setBackgroundColor(Color.parseColor("#f87171"))
-            btnStart.visibility = View.VISIBLE
-            btnStop.visibility = View.GONE
             etServerUrl.isEnabled = true
-
-            // Reset stats
-            tvConnection.text = "—"
-            tvPending.text = "0"
-            tvRetries.text = "0"
             tvDuration.text = "00:00"
             tvStorage.text = "—"
         }
+    }
+
+    private fun toggleStandby() {
+        if (CommandPollingService.isPolling) {
+            val intent = Intent(this, CommandPollingService::class.java).apply {
+                action = CommandPollingService.ACTION_STOP_POLLING
+            }
+            startService(intent)
+            appendLog("Standby mode disabled.")
+        } else {
+            val url = etServerUrl.text.toString().trim()
+            if (url.isEmpty()) {
+                Toast.makeText(this, "Please enter a server URL", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            prefs.edit().putString("server_url", url).apply()
+
+            val clientName = prefs.getString("client_name", null)
+                ?: "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }}-${Build.MODEL.replace(" ", "-")}"
+
+            val intent = Intent(this, CommandPollingService::class.java).apply {
+                action = CommandPollingService.ACTION_START_POLLING
+                putExtra(CommandPollingService.EXTRA_SERVER_URL, url)
+                putExtra(CommandPollingService.EXTRA_CLIENT_NAME, clientName)
+            }
+            ContextCompat.startForegroundService(this, intent)
+            appendLog("Standby mode enabled. Listening for remote commands...")
+        }
+        
+        btnStandby.postDelayed({ updateUIForServiceState(AudioRecordService.isRunning) }, 300)
     }
 
     private fun updateStats(pending: Int, retries: Int, duration: Long,

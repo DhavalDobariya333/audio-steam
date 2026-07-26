@@ -53,6 +53,15 @@ export async function initDatabase(): Promise<void> {
     `);
 
     db.run(`
+        CREATE TABLE IF NOT EXISTS device_commands (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id       TEXT    UNIQUE NOT NULL,
+            command         TEXT    NOT NULL DEFAULT 'NONE',
+            updated_at      TEXT    NOT NULL
+        );
+    `);
+
+    db.run(`
         CREATE TABLE IF NOT EXISTS chunks (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             chunk_id        TEXT    UNIQUE NOT NULL,
@@ -354,6 +363,33 @@ export function closeDatabase(): void {
         clearInterval(saveInterval);
         console.log('[database] Closed');
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DEVICE COMMAND OPERATIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface DeviceCommand {
+    client_id: string;
+    command: string;
+    updated_at: string;
+}
+
+export function setDeviceCommand(clientId: string, command: string): void {
+    const now = new Date().toISOString();
+    execute(
+        `INSERT INTO device_commands (client_id, command, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(client_id) DO UPDATE SET command = excluded.command, updated_at = excluded.updated_at`,
+        [clientId, command, now]
+    );
+}
+
+export function getDeviceCommand(clientId: string): DeviceCommand | undefined {
+    return queryOne('SELECT * FROM device_commands WHERE client_id = ?', [clientId]) as DeviceCommand | undefined;
+}
+
+export function clearDeviceCommand(clientId: string): void {
+    execute('UPDATE device_commands SET command = ? WHERE client_id = ?', ['NONE', clientId]);
 }
 
 // Start auto-save when module loads
