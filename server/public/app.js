@@ -558,7 +558,7 @@ function formatSize(bytes) {
 async function sendRemoteCommand(command) {
     const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : null;
     if (!clientId) {
-        showToast('Please select a device from the remote control dropdown first', true);
+        alert('Please select a device from the remote control dropdown first');
         return;
     }
 
@@ -569,14 +569,14 @@ async function sendRemoteCommand(command) {
             body: JSON.stringify({ client_id: clientId, command })
         });
         if (res.ok) {
-            showToast(`Sent ${command} signal to ${clientId}`);
+            alert(`Sent ${command} signal to ${clientId}`);
         } else {
             const err = await res.json();
-            showToast(`Error: ${err.message}`, true);
+            alert(`Error: ${err.message}`);
         }
     } catch (e) {
         console.error('Remote command error:', e);
-        showToast('Failed to send remote command', true);
+        alert('Failed to send remote command');
     }
 }
 
