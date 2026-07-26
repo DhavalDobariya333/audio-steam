@@ -69,6 +69,7 @@ const ui = {
     // Remote Control
     btnRemoteStart: document.getElementById('btn-remote-start'),
     btnRemoteStop: document.getElementById('btn-remote-stop'),
+    remoteClientSelect: document.getElementById('remote-client-select'),
     
     // View tabs
     tabAll: document.getElementById('tab-all'),
@@ -424,16 +425,20 @@ function updateProgress() {
 function renderSessionsList() {
     const allSessions = state.dashboardSessions;
 
-    // Populate client filter options
+    // Populate client filter options and remote select options
     if (ui.clientFilter) {
         const selectedClient = ui.clientFilter.value;
+        const selectedRemote = ui.remoteClientSelect ? ui.remoteClientSelect.value : '';
         const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))];
         
         let filterHtml = '<option value="">All Devices / Clients</option>';
+        let remoteHtml = '<option value="">Select Device...</option>';
         clients.forEach(c => {
             filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
+            remoteHtml += `<option value="${c}" ${c === selectedRemote ? 'selected' : ''}>📱 ${c}</option>`;
         });
         ui.clientFilter.innerHTML = filterHtml;
+        if (ui.remoteClientSelect) ui.remoteClientSelect.innerHTML = remoteHtml;
     }
 
     const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
@@ -551,19 +556,11 @@ function formatSize(bytes) {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function sendRemoteCommand(command) {
-    const sessionId = ui.select.value;
-    if (!sessionId) {
-        showToast('Please select a device from the dropdown first', true);
+    const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : null;
+    if (!clientId) {
+        showToast('Please select a device from the remote control dropdown first', true);
         return;
     }
-    
-    const session = state.sessions.find(s => s.session_id === sessionId) || state.dashboardSessions.find(s => s.session_id === sessionId);
-    if (!session || !session.client_name) {
-        showToast('Could not determine client device name', true);
-        return;
-    }
-    
-    const clientId = session.client_name;
 
     try {
         const res = await fetch('/api/v1/broadcasts/remote-command', {
