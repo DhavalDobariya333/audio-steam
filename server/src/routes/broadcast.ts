@@ -11,6 +11,8 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
 import * as db from '../database';
 import * as storage from '../storage';
 import { appendToHLS, finalizeHLS } from '../hls';
@@ -167,6 +169,68 @@ router.get('/:session_id/export-channel', (req: Request, res: Response) => {
         }
 
         const formatParam = (req.query.format as string || 'aac').toLowerCase();
+
+        if (formatParam === 'zip') {
+            const chunks = db.getSessionChunks(session_id);
+            if (chunks.length === 0) {
+                res.status(404).json({ status: 'error', message: 'No chunks available for this session' });
+                return;
+            }
+
+            const rawDir = storage.getRawDir(session_id);
+            const resolvedRawDir = path.resolve(rawDir);
+            const chunkFiles = chunks
+                .map(c => path.resolve(c.filepath))
+                .filter(filePath =>
+                    (filePath === resolvedRawDir || filePath.startsWith(`${resolvedRawDir}${path.sep}`))
+                    && fs.existsSync(filePath)
+                );
+
+            if (chunkFiles.length === 0) {
+                res.status(404).json({ status: 'error', message: 'Chunk files not found on disk' });
+                return;
+            }
+
+            const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_chunks.zip`;
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+            const { spawn } = require('child_process');
+            const proc = spawn('zip', ['-q', '-j', '-', '-@'], {
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+
+            proc.stdout.pipe(res);
+            proc.stderr.on('data', (data: Buffer) => {
+                console.error(`[broadcast] ZIP export stderr: ${data.toString()}`);
+            });
+            proc.on('error', (err: any) => {
+                console.error('[broadcast] ZIP export error:', err);
+                if (!res.headersSent) {
+                    res.status(500).json({ status: 'error', message: 'ZIP export failed' });
+                }
+            });
+            proc.on('close', (code: number) => {
+                if (code !== 0) {
+                    console.error(`[broadcast] ZIP export exited with code ${code}`);
+                    if (!res.writableEnded) {
+                        res.end();
+                    }
+                }
+            });
+
+            for (const filePath of chunkFiles) {
+                proc.stdin.write(`${filePath}\n`);
+            }
+            proc.stdin.end();
+
+            req.on('close', () => {
+                if (!proc.killed) {
+                    proc.kill();
+                }
+            });
+            return;
+        }
         
         if (formatParam === 'm3u8') {
             const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.m3u8`;
