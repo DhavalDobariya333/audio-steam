@@ -460,6 +460,8 @@ function renderSessionsList() {
         const sizeStr = formatSize(s.total_bytes || 0);
         const client = s.client_name || 'Unknown Device';
         const shortId = s.session_id.slice(0, 8);
+        const hlsUrl = `${window.location.origin}/storage/sessions/${s.session_id}/hls/vod.m3u8`;
+        const downloadUrl = `/api/v1/broadcasts/${s.session_id}/export-channel`;
 
         return `
             <li class="session-card session-card--${statusClass}">
@@ -470,6 +472,7 @@ function renderSessionsList() {
                             <span class="badge badge--${statusClass}">${badgeText}</span>
                         </div>
                         <div class="session-card__meta">
+                            <span title="Full Session ID: ${s.session_id}">🆔 ID: <code style="background: rgba(255,255,255,0.1); padding: 1px 5px; border-radius: 4px; font-family: monospace; user-select: all;">${s.session_id}</code></span>
                             <span>📱 ${s.device_info || 'Android Device'}</span>
                             <span>⏱ ${duration}</span>
                             <span>📦 ${s.total_chunks || 0} chunks</span>
@@ -477,9 +480,12 @@ function renderSessionsList() {
                             <span>📅 ${dateStr}</span>
                         </div>
                     </div>
-                    <div class="session-card__actions">
-                        <a href="/storage/sessions/${s.session_id}/hls/vod.m3u8" target="_blank" download="audio_recording_${shortId}.m3u8" class="icon-btn" title="Download Audio Recording">
-                            📥 Download HLS
+                    <div class="session-card__actions" style="margin-top: 6px;">
+                        <button class="icon-btn" title="Copy HLS VOD Stream Link" onclick="copyHlsLink('${hlsUrl}')">
+                            📋 Copy Link
+                        </button>
+                        <a href="${downloadUrl}" target="_blank" class="icon-btn" title="Download Audio Recording">
+                            📥 Download Audio
                         </a>
                         <button class="icon-btn icon-btn--danger" title="Delete Session" onclick="openDeleteModal('${s.session_id}')">
                             🗑️
@@ -494,6 +500,18 @@ function renderSessionsList() {
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL & HELPERS
 // ════════════════════════════════════════════════════════════════════════════
+
+function copyHlsLink(url) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(() => {
+            alert('Copied HLS Link to clipboard:\n' + url);
+        }).catch(() => {
+            prompt('Copy HLS Stream Link:', url);
+        });
+    } else {
+        prompt('Copy HLS Stream Link:', url);
+    }
+}
 
 function openDeleteModal(sessionId) {
     state.deleteTargetId = sessionId;
