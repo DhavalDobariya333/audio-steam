@@ -10,6 +10,7 @@
 
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
@@ -19,27 +20,16 @@ import { appendToHLS, finalizeHLS } from '../hls';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS } from '../config';
 
 const router = Router();
-const EXPORT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const EXPORT_RATE_LIMIT_MAX_REQUESTS = 15;
-const exportRateTracker = new Map<string, { count: number; windowStartMs: number }>();
-
-function isExportRequestAllowed(key: string): boolean {
-    const now = Date.now();
-    const current = exportRateTracker.get(key);
-
-    if (!current || (now - current.windowStartMs) >= EXPORT_RATE_LIMIT_WINDOW_MS) {
-        exportRateTracker.set(key, { count: 1, windowStartMs: now });
-        return true;
-    }
-
-    if (current.count >= EXPORT_RATE_LIMIT_MAX_REQUESTS) {
-        return false;
-    }
-
-    current.count += 1;
-    exportRateTracker.set(key, current);
-    return true;
-}
+const exportRateLimit = rateLimit({
+    windowMs: 60 * 1000,
+    max: 15,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        status: 'error',
+        message: 'Too many export requests. Please retry after a minute.',
+    },
+});
 
 // Multer: store uploaded chunks in memory (they're small — max 5MB)
 const upload = multer({
@@ -170,19 +160,9 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
 // EXPORT AUDIO BY CHANNEL (Mic vs Internal vs Stereo)
 // ════════════════════════════════════════════════════════════════════════════
 
-router.get('/:session_id/export-channel', (req: Request, res: Response) => {
+router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: Response) => {
     try {
         const session_id = req.params.session_id as string;
-        const requesterIp = req.ip || req.socket.remoteAddress || 'unknown';
-        const rateLimitKey = `${requesterIp}:${session_id}`;
-        if (!isExportRequestAllowed(rateLimitKey)) {
-            res.status(429).json({
-                status: 'error',
-                message: 'Too many export requests. Please retry after a minute.',
-            });
-            return;
-        }
-
         const channelParam = (req.query.channel as string || 'both').toLowerCase();
         const session = db.getSession(session_id);
 
