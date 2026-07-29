@@ -462,6 +462,7 @@ function renderSessionsList() {
         const shortId = s.session_id.slice(0, 8);
         const hlsUrl = `${window.location.origin}/storage/sessions/${s.session_id}/hls/vod.m3u8`;
         const downloadUrl = `/api/v1/broadcasts/${s.session_id}/export-channel`;
+        const chunkZipUrl = `/api/v1/broadcasts/${s.session_id}/export-channel?format=zip`;
 
         return `
             <li class="session-card session-card--${statusClass}">
@@ -486,6 +487,9 @@ function renderSessionsList() {
                         </button>
                         <a href="${downloadUrl}" target="_blank" class="icon-btn" title="Download Audio Recording">
                             📥 Download Audio
+                        </a>
+                        <a href="${chunkZipUrl}" target="_blank" class="icon-btn" title="Download Raw Chunks ZIP">
+                            🗜️ Download Chunks ZIP
                         </a>
                         <button class="icon-btn icon-btn--danger" title="Delete Session" onclick="openDeleteModal('${s.session_id}')">
                             🗑️
