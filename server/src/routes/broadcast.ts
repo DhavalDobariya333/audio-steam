@@ -166,12 +166,51 @@ router.get('/:session_id/export-channel', (req: Request, res: Response) => {
             return;
         }
 
-        const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.m3u8`;
+        const formatParam = (req.query.format as string || 'aac').toLowerCase();
         
-        // Serve playlist link for channel export or direct file download
-        res.setHeader('Content-Type', 'audio/x-mpegurl');
+        if (formatParam === 'm3u8') {
+            const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.m3u8`;
+            res.setHeader('Content-Type', 'audio/x-mpegurl');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.sendFile(vodM3u8);
+            return;
+        }
+
+        // Export as single combined audio file using FFmpeg
+        const isMP3 = formatParam === 'mp3';
+        const ext = isMP3 ? 'mp3' : 'aac';
+        const contentType = isMP3 ? 'audio/mpeg' : 'audio/aac';
+        const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.${ext}`;
+        
+        res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.sendFile(vodM3u8);
+
+        const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+        const { spawn } = require('child_process');
+
+        const args = ['-i', vodM3u8];
+        if (isMP3) {
+            args.push('-c:a', 'libmp3lame', '-q:a', '2', '-f', 'mp3');
+        } else {
+            args.push('-c:a', 'copy', '-f', 'adts'); // fast copy
+        }
+        args.push('pipe:1');
+
+        const proc = spawn(ffmpegInstaller.path, args);
+        proc.stdout.pipe(res);
+
+        proc.on('error', (err: any) => {
+            console.error('[broadcast] FFmpeg export error:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ status: 'error', message: 'Export failed' });
+            }
+        });
+
+        req.on('close', () => {
+            if (!proc.killed) {
+                proc.kill();
+            }
+        });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }

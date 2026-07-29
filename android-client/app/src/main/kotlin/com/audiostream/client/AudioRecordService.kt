@@ -292,7 +292,8 @@ class AudioRecordService : Service() {
         serviceScope.launch(Dispatchers.IO) {
             while (isRunning) {
                 try {
-                    val endpoint = "${serverUrl.trimEnd('/')}/api/v1/broadcasts/command?client_id=$clientName"
+                    val encodedClientName = java.net.URLEncoder.encode(clientName, "UTF-8")
+                    val endpoint = "${serverUrl.trimEnd('/')}/api/v1/broadcasts/command?client_id=$encodedClientName"
                     val request = Request.Builder().url(endpoint).get().build()
             
                     httpClient.newCall(request).execute().use { response ->
