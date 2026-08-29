@@ -17,7 +17,7 @@ import path from 'path';
 import * as db from '../database';
 import * as storage from '../storage';
 import { appendToHLS, finalizeHLS } from '../hls';
-import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS } from '../config';
+import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
 const router = Router();
 const exportRateLimit = rateLimit({
@@ -370,21 +370,69 @@ router.post('/remote-command', (req: Request, res: Response) => {
 router.get('/command', (req: Request, res: Response) => {
     try {
         const client_id = req.query.client_id as string;
+        const status = req.query.status as string; // 'idle' or 'recording'
         if (!client_id) {
             res.status(400).json({ status: 'error', message: 'Missing client_id' });
             return;
         }
 
+        if (status) {
+            db.updateDeviceStatus(client_id, status);
+        }
+
         const cmd = db.getDeviceCommand(client_id);
         const commandStr = cmd ? cmd.command : 'NONE';
+        const autoScreenshot = cmd ? cmd.auto_screenshot : 0;
+        const screenshotInterval = cmd ? cmd.screenshot_interval : 30;
         
-        // If a command was fetched (START or STOP), clear it so we don't trigger it again endlessly
-        if (commandStr === 'START' || commandStr === 'STOP') {
+        // If a command was fetched, clear it so we don't trigger it again endlessly
+        if (commandStr === 'START' || commandStr === 'STOP' || commandStr === 'SCREENSHOT_NOW') {
              db.clearDeviceCommand(client_id);
              console.log(`[broadcast] Remote command consumed by ${client_id}: ${commandStr}`);
         }
 
-        res.json({ command: commandStr });
+        res.json({ 
+            command: commandStr,
+            auto_screenshot: autoScreenshot,
+            screenshot_interval: screenshotInterval
+        });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+router.post('/screenshot-settings', (req: Request, res: Response) => {
+    try {
+        const { client_id, auto_screenshot, interval } = req.body;
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+        db.updateDeviceScreenshotSettings(client_id, auto_screenshot ? 1 : 0, interval || 30);
+        res.json({ status: 'success' });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+router.post('/upload-screenshot', upload.single('image'), (req: Request, res: Response) => {
+    try {
+        const { client_id } = req.body;
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+        if (!req.file) {
+            res.status(400).json({ status: 'error', message: 'Missing image file' });
+            return;
+        }
+        
+        const dir = path.join(PUBLIC_DIR, 'screenshots');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        
+        fs.writeFileSync(path.join(dir, `${client_id}.jpg`), req.file.buffer);
+        
+        res.json({ status: 'success' });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }

@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             tvStatus.setTextColor(Color.parseColor("#10b981"))
             vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
             etServerUrl.isEnabled = false
-        } else if (CommandPollingService.isPolling) {
+        } else if (CommandService.isPolling) {
             btnStart.visibility = View.VISIBLE
             btnStandby.text = "⏹ STOP LISTENING"
             btnStandby.visibility = View.VISIBLE
@@ -252,9 +252,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleStandby() {
-        if (CommandPollingService.isPolling) {
-            val intent = Intent(this, CommandPollingService::class.java).apply {
-                action = CommandPollingService.ACTION_STOP_POLLING
+        if (CommandService.isPolling) {
+            val intent = Intent(this, CommandService::class.java).apply {
+                action = CommandService.ACTION_STOP_POLLING
             }
             startService(intent)
             appendLog("Standby mode disabled.")
@@ -266,14 +266,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             prefs.edit().putString("server_url", url).apply()
+            checkBatteryOptimization()
 
-            val clientName = prefs.getString("client_name", null)
-                ?: "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }}-${Build.MODEL.replace(" ", "-")}"
-
-            val intent = Intent(this, CommandPollingService::class.java).apply {
-                action = CommandPollingService.ACTION_START_POLLING
-                putExtra(CommandPollingService.EXTRA_SERVER_URL, url)
-                putExtra(CommandPollingService.EXTRA_CLIENT_NAME, clientName)
+            val intent = Intent(this, CommandService::class.java).apply {
+                action = CommandService.ACTION_START_POLLING
+                putExtra(AudioRecordService.EXTRA_SERVER_URL, url)
             }
             ContextCompat.startForegroundService(this, intent)
             appendLog("Standby mode enabled. Listening for remote commands...")

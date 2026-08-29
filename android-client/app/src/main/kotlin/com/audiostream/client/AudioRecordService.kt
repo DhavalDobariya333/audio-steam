@@ -222,9 +222,6 @@ class AudioRecordService : Service() {
         // 6. Start notification update loop
         startNotificationUpdater()
 
-        // 7. Start polling for remote STOP command
-        startCommandPolling()
-
         sendLog("Service started. Client: $clientName")
         sendLog("Server: $serverUrl")
         sendLog("Chunk duration: ${chunkDurationSeconds}s")
@@ -277,45 +274,6 @@ class AudioRecordService : Service() {
 
         sendLog("Service stopped")
         broadcastStateUpdate()
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // REMOTE COMMAND POLLING
-    // ══════════════════════════════════════════════════════════════════════
-    
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
-
-    private fun startCommandPolling() {
-        serviceScope.launch(Dispatchers.IO) {
-            while (isRunning) {
-                try {
-                    val encodedClientName = java.net.URLEncoder.encode(clientName, "UTF-8")
-                    val endpoint = "${serverUrl.trimEnd('/')}/api/v1/broadcasts/command?client_id=$encodedClientName"
-                    val request = Request.Builder().url(endpoint).get().build()
-            
-                    httpClient.newCall(request).execute().use { response ->
-                        if (response.isSuccessful) {
-                            val body = response.body?.string()
-                            if (body != null) {
-                                val json = JSONObject(body)
-                                val command = json.optString("command", "NONE")
-                                
-                                if (command == "STOP") {
-                                    sendLog("Received REMOTE STOP from Dashboard!")
-                                    stopMonitoring()
-                                }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Ignore transient network errors
-                }
-                delay(5000L)
-            }
-        }
     }
 
     // ══════════════════════════════════════════════════════════════════════

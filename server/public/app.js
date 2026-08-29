@@ -15,6 +15,7 @@ const state = {
     isPlaying: false,
     isLiveLock: true,
     deleteTargetId: null,
+    deviceStatus: [],
 };
 
 // UI Elements
@@ -84,6 +85,17 @@ const ui = {
     modalSessionId: document.getElementById('modal-session-id'),
     modalCancel: document.getElementById('modal-cancel'),
     modalConfirm: document.getElementById('modal-confirm'),
+    
+    // Screenshot
+    btnRemoteScreenshot: document.getElementById('btn-remote-screenshot'),
+    btnViewScreenshot: document.getElementById('btn-view-screenshot'),
+    toggleAutoScreenshot: document.getElementById('toggle-auto-screenshot'),
+    inputScreenshotInterval: document.getElementById('input-screenshot-interval'),
+    modalScreenshotOverlay: document.getElementById('modal-screenshot-overlay'),
+    screenshotImage: document.getElementById('screenshot-image'),
+    screenshotError: document.getElementById('screenshot-error'),
+    btnCloseScreenshot: document.getElementById('btn-close-screenshot'),
+    btnRefreshScreenshot: document.getElementById('btn-refresh-screenshot'),
 };
 
 let hls = null;
@@ -164,6 +176,64 @@ function bindEvents() {
     // Modal
     ui.modalCancel.addEventListener('click', closeModal);
     ui.modalConfirm.addEventListener('click', confirmDelete);
+
+    // Screenshot Events
+    ui.btnRemoteScreenshot.addEventListener('click', () => sendRemoteCommand('SCREENSHOT_NOW'));
+    
+    ui.btnViewScreenshot.addEventListener('click', () => {
+        const client_id = ui.remoteClientSelect.value;
+        if (!client_id) {
+            showToast('Please select a device first', 'error');
+            return;
+        }
+        ui.modalScreenshotOverlay.style.display = 'flex';
+        loadScreenshotImage(client_id);
+    });
+    
+    ui.btnCloseScreenshot.addEventListener('click', () => {
+        ui.modalScreenshotOverlay.style.display = 'none';
+    });
+    
+    ui.btnRefreshScreenshot.addEventListener('click', () => {
+        const client_id = ui.remoteClientSelect.value;
+        if (client_id) loadScreenshotImage(client_id);
+    });
+    
+    const saveScreenshotSettings = () => {
+        const client_id = ui.remoteClientSelect.value;
+        if (!client_id) return;
+        const auto_screenshot = ui.toggleAutoScreenshot.checked;
+        const interval = parseInt(ui.inputScreenshotInterval.value, 10) || 30;
+        
+        fetch(`${API_DASHBOARD}/screenshot-settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id, auto_screenshot, interval })
+        }).then(res => res.json())
+          .then(data => {
+              if (data.status === 'success') showToast('Screenshot settings saved');
+          }).catch(console.error);
+    };
+    
+    ui.toggleAutoScreenshot.addEventListener('change', saveScreenshotSettings);
+    ui.inputScreenshotInterval.addEventListener('change', saveScreenshotSettings);
+    
+    ui.remoteClientSelect.addEventListener('change', () => {
+        const client_id = ui.remoteClientSelect.value;
+        if (client_id) {
+            // Fetch current settings for this device
+            const device = state.deviceStatus.find(d => d.client_id === client_id);
+            if (device) {
+                // Settings not returned in /devices endpoint currently, let's fetch /command
+                fetch(`/api/v1/broadcasts/command?client_id=${client_id}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        ui.toggleAutoScreenshot.checked = data.auto_screenshot === 1;
+                        ui.inputScreenshotInterval.value = data.screenshot_interval || 30;
+                    }).catch(console.error);
+            }
+        }
+    });
 }
 
 function setViewMode(mode) {
@@ -192,7 +262,19 @@ function setViewMode(mode) {
 // ════════════════════════════════════════════════════════════════════════════
 
 async function fetchAllData() {
-    await Promise.all([fetchActiveSessions(), fetchStats(), fetchAllSessions()]);
+    await Promise.all([fetchActiveSessions(), fetchStats(), fetchAllSessions(), fetchDeviceStatus()]);
+}
+
+async function fetchDeviceStatus() {
+    try {
+        const res = await fetch(`${API_DASHBOARD}/devices`);
+        if (!res.ok) return;
+        const data = await res.json();
+        state.deviceStatus = data.devices || [];
+        updateRemoteSelectUI();
+    } catch (e) {
+        console.error('Device status fetch error:', e);
+    }
 }
 
 async function fetchActiveSessions() {
@@ -422,24 +504,44 @@ function updateProgress() {
 // DASHBOARD & SESSIONS RENDER
 // ════════════════════════════════════════════════════════════════════════════
 
+function updateRemoteSelectUI() {
+    if (!ui.remoteClientSelect) return;
+    const selectedRemote = ui.remoteClientSelect.value;
+    
+    // Merge clients from sessions AND deviceStatus
+    const clientsFromSessions = [...new Set(state.dashboardSessions.map(s => s.client_name).filter(Boolean))];
+    const clientsFromStatus = state.deviceStatus.map(d => d.client_id);
+    const allClients = [...new Set([...clientsFromSessions, ...clientsFromStatus])];
+    
+    let remoteHtml = '<option value="">Select Device...</option>';
+    allClients.forEach(c => {
+        const deviceData = state.deviceStatus.find(d => d.client_id === c);
+        const status = deviceData ? deviceData.status : 'offline';
+        let icon = '🔴';
+        if (status === 'recording') icon = '🟢';
+        else if (status === 'idle') icon = '🟡';
+        
+        remoteHtml += `<option value="${c}" ${c === selectedRemote ? 'selected' : ''}>${icon} ${c} (${status})</option>`;
+    });
+    ui.remoteClientSelect.innerHTML = remoteHtml;
+}
+
 function renderSessionsList() {
     const allSessions = state.dashboardSessions;
 
-    // Populate client filter options and remote select options
+    // Populate client filter options
     if (ui.clientFilter) {
         const selectedClient = ui.clientFilter.value;
-        const selectedRemote = ui.remoteClientSelect ? ui.remoteClientSelect.value : '';
         const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))];
         
         let filterHtml = '<option value="">All Devices / Clients</option>';
-        let remoteHtml = '<option value="">Select Device...</option>';
         clients.forEach(c => {
             filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
-            remoteHtml += `<option value="${c}" ${c === selectedRemote ? 'selected' : ''}>📱 ${c}</option>`;
         });
         ui.clientFilter.innerHTML = filterHtml;
-        if (ui.remoteClientSelect) ui.remoteClientSelect.innerHTML = remoteHtml;
     }
+
+    updateRemoteSelectUI();
 
     const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
     const sessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;

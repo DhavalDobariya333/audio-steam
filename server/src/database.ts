@@ -54,12 +54,26 @@ export async function initDatabase(): Promise<void> {
 
     db.run(`
         CREATE TABLE IF NOT EXISTS device_commands (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id       TEXT    UNIQUE NOT NULL,
-            command         TEXT    NOT NULL DEFAULT 'NONE',
-            updated_at      TEXT    NOT NULL
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id           TEXT    UNIQUE NOT NULL,
+            command             TEXT    NOT NULL DEFAULT 'NONE',
+            status              TEXT    NOT NULL DEFAULT 'idle',
+            auto_screenshot     INTEGER NOT NULL DEFAULT 0,
+            screenshot_interval INTEGER NOT NULL DEFAULT 30,
+            updated_at          TEXT    NOT NULL
         );
     `);
+
+    // Attempt to add 'status', 'auto_screenshot', and 'screenshot_interval' columns if migrating from an older DB version
+    try {
+        db.run("ALTER TABLE device_commands ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
+    } catch { }
+    try {
+        db.run("ALTER TABLE device_commands ADD COLUMN auto_screenshot INTEGER NOT NULL DEFAULT 0");
+    } catch { }
+    try {
+        db.run("ALTER TABLE device_commands ADD COLUMN screenshot_interval INTEGER NOT NULL DEFAULT 30");
+    } catch { }
 
     db.run(`
         CREATE TABLE IF NOT EXISTS chunks (
@@ -187,7 +201,7 @@ export function getActiveSessions(): Session[] {
 
 export function endSession(sessionId: string): boolean {
     const now = new Date().toISOString();
-    execute("UPDATE sessions SET status = 'ended', ended_at = ? WHERE session_id = ? AND status = 'live'", [now, sessionId]);
+    execute("UPDATE sessions SET status = 'ended', ended_at = ?, updated_at = ? WHERE session_id = ? AND status = 'live'", [now, now, sessionId]);
     return getDb().getRowsModified() > 0;
 }
 
@@ -215,6 +229,7 @@ export function cleanupStaleSessions(timeoutSeconds: number = 60): string[] {
     }
     return endedIds;
 }
+
 
 export function deleteSession(sessionId: string): boolean {
     execute('DELETE FROM chunks WHERE session_id = ?', [sessionId]);
@@ -372,6 +387,9 @@ export function closeDatabase(): void {
 export interface DeviceCommand {
     client_id: string;
     command: string;
+    status: string;
+    auto_screenshot: number;
+    screenshot_interval: number;
     updated_at: string;
 }
 
@@ -384,12 +402,34 @@ export function setDeviceCommand(clientId: string, command: string): void {
     );
 }
 
+export function updateDeviceScreenshotSettings(clientId: string, autoScreenshot: number, interval: number): void {
+    const now = new Date().toISOString();
+    execute(
+        `INSERT INTO device_commands (client_id, auto_screenshot, screenshot_interval, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(client_id) DO UPDATE SET auto_screenshot = excluded.auto_screenshot, screenshot_interval = excluded.screenshot_interval, updated_at = excluded.updated_at`,
+        [clientId, autoScreenshot, interval, now]
+    );
+}
+
 export function getDeviceCommand(clientId: string): DeviceCommand | undefined {
     return queryOne('SELECT * FROM device_commands WHERE client_id = ?', [clientId]) as DeviceCommand | undefined;
 }
 
+export function getAllDeviceCommands(): DeviceCommand[] {
+    return queryAll('SELECT * FROM device_commands ORDER BY updated_at DESC') as DeviceCommand[];
+}
+
 export function clearDeviceCommand(clientId: string): void {
     execute('UPDATE device_commands SET command = ? WHERE client_id = ?', ['NONE', clientId]);
+}
+
+export function updateDeviceStatus(clientId: string, status: string): void {
+    const now = new Date().toISOString();
+    execute(
+        `INSERT INTO device_commands (client_id, status, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(client_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`,
+        [clientId, status, now]
+    );
 }
 
 // Start auto-save when module loads

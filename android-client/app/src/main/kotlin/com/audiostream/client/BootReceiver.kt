@@ -34,14 +34,10 @@ class BootReceiver : BroadcastReceiver() {
             // Check if we have a saved server URL
             val serverUrl = prefs.getString("server_url", null) ?: return
 
-            // Check if the service was previously running
-            val wasRunning = prefs.getBoolean("was_running", false)
-            if (!wasRunning) return
-
-            // Start the service
+            // Start the CommandService watchdog
             try {
-                val serviceIntent = Intent(context, AudioRecordService::class.java).apply {
-                    this.action = AudioRecordService.ACTION_START
+                val serviceIntent = Intent(context, CommandService::class.java).apply {
+                    this.action = CommandService.ACTION_START_POLLING
                     putExtra(AudioRecordService.EXTRA_SERVER_URL, serverUrl)
                 }
                 ContextCompat.startForegroundService(context, serviceIntent)

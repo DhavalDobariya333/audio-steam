@@ -116,4 +116,17 @@ router.get('/stats', (req: Request, res: Response) => {
     }
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// DEVICE STATUS
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get('/devices', (req: Request, res: Response) => {
+    try {
+        const devices = db.getAllDeviceCommands();
+        res.json({ devices });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 export default router;
