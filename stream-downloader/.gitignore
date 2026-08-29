@@ -1,0 +1,8 @@
+node_modules/
+downloaded_chunks/
+temp_chunks_list.txt
+*.tmp
+*.ts
+*.mp3
+*.m4a
+*.wav

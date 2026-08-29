@@ -1,0 +1,23 @@
+{
+  "name": "stream-downloader",
+  "version": "1.0.0",
+  "description": "High-speed parallel HLS chunk downloader and MP3 audio combiner",
+  "main": "download_chunks.js",
+  "scripts": {
+    "download": "node download_chunks.js",
+    "combine": "node combine_chunks.js"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+  },
+  "keywords": [
+    "hls",
+    "stream",
+    "audio",
+    "downloader",
+    "ffmpeg",
+    "chunks"
+  ],
+  "author": "",
+  "license": "ISC"
+}
