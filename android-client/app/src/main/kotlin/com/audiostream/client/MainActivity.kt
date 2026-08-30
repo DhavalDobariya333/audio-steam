@@ -54,6 +54,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvLog: TextView
     private lateinit var scrollLog: ScrollView
 
+    private lateinit var tvHeader: TextView
+    private lateinit var tvPublicPackets: TextView
+    private lateinit var debugPanel: View
+    private var secretTapCount = 0
+    private var lastSecretTapTime = 0L
+
     private lateinit var prefs: SharedPreferences
 
     // ── Broadcast Receiver ──
@@ -100,9 +106,34 @@ class MainActivity : AppCompatActivity() {
         tvClientName = findViewById(R.id.tvClientName)
         tvLog = findViewById(R.id.tvLog)
         scrollLog = findViewById(R.id.scrollLog)
+        
+        tvHeader = findViewById(R.id.tvHeader)
+        tvPublicPackets = findViewById(R.id.tvPublicPackets)
+        debugPanel = findViewById(R.id.debugPanel)
 
-        // Load saved preferences
         prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+
+        // Setup Secret Trigger
+        tvHeader.setOnClickListener {
+            val now = System.currentTimeMillis()
+            if (now - lastSecretTapTime < 500) {
+                secretTapCount++
+            } else {
+                secretTapCount = 1
+            }
+            lastSecretTapTime = now
+
+            if (secretTapCount >= 6) {
+                secretTapCount = 0
+                val isHidden = debugPanel.visibility == View.GONE
+                debugPanel.visibility = if (isHidden) View.VISIBLE else View.GONE
+                if (isHidden) {
+                    Toast.makeText(this, "Debug Panel Revealed", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        // Restore saved URL
         val savedUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com")
         etServerUrl.setText(savedUrl)
 
@@ -286,6 +317,9 @@ class MainActivity : AppCompatActivity() {
         tvRetries.text = retries.toString()
         tvDuration.text = formatDuration(duration)
         tvStorage.text = storage
+        
+        val packetsSent = Math.max(0, (duration / 10000).toInt() - pending)
+        tvPublicPackets.text = packetsSent.toString()
 
         // Color connection status
         tvConnection.setTextColor(when (connection) {

@@ -24,7 +24,7 @@
             <div class="header__brand">
                 <div class="logo-icon">📡</div>
                 <div>
-                    <h1 class="header__title">Audio Stream</h1>
+                    <h1 class="header__title" id="secret-trigger-header" style="cursor: pointer; user-select: none;">Audio Stream</h1>
                     <div class="header__status" id="server-status">
                         <span class="status-dot status-dot--online"></span>
                         <span id="status-text">Server Live</span>
@@ -148,8 +148,8 @@
                 <audio id="audio-player" crossorigin="anonymous" preload="none"></audio>
             </section>
 
-            <!-- REMOTE DEVICE CONTROLLER -->
-            <section class="section-card section-card--remote" id="sec-remote">
+            <!-- REMOTE DEVICE CONTROLLER (HIDDEN BY DEFAULT) -->
+            <section class="section-card section-card--remote" id="sec-remote" style="display: none;">
                 <div class="card-head">
                     <h2 class="card-title">📡 Remote Device Controller</h2>
                 </div>

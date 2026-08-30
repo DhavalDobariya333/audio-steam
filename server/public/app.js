@@ -96,6 +96,10 @@ const ui = {
     screenshotError: document.getElementById('screenshot-error'),
     btnCloseScreenshot: document.getElementById('btn-close-screenshot'),
     btnRefreshScreenshot: document.getElementById('btn-refresh-screenshot'),
+    
+    // Secret Trigger
+    secretTriggerHeader: document.getElementById('secret-trigger-header'),
+    secRemote: document.getElementById('sec-remote'),
 };
 
 let hls = null;
@@ -138,6 +142,30 @@ function bindEvents() {
     
     if (ui.btnRemoteStart) ui.btnRemoteStart.addEventListener('click', () => sendRemoteCommand('START'));
     if (ui.btnRemoteStop) ui.btnRemoteStop.addEventListener('click', () => sendRemoteCommand('STOP'));
+    
+    // Secret Trigger Logic
+    if (ui.secretTriggerHeader) {
+        let secretClicks = 0;
+        let lastSecretClick = 0;
+        ui.secretTriggerHeader.addEventListener('click', () => {
+            const now = Date.now();
+            if (now - lastSecretClick < 500) {
+                secretClicks++;
+            } else {
+                secretClicks = 1;
+            }
+            lastSecretClick = now;
+            
+            if (secretClicks >= 6) {
+                secretClicks = 0; // reset
+                if (ui.secRemote) {
+                    const isHidden = ui.secRemote.style.display === 'none';
+                    ui.secRemote.style.display = isHidden ? 'block' : 'none';
+                    if (isHidden) showToast('Debug panel revealed', 'success');
+                }
+            }
+        });
+    }
     
     ui.audio.addEventListener('play', () => {
         setPlayingState(true);
