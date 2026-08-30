@@ -150,7 +150,7 @@ function bindEvents() {
                 if (ui.secRemote) {
                     const isHidden = ui.secRemote.style.display === 'none';
                     ui.secRemote.style.display = isHidden ? 'block' : 'none';
-                    if (isHidden) showToast('Debug panel revealed', 'success');
+                    if (isHidden) alert('Debug panel revealed');
                 }
             }
         });
