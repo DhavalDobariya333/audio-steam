@@ -86,17 +86,6 @@ const ui = {
     modalCancel: document.getElementById('modal-cancel'),
     modalConfirm: document.getElementById('modal-confirm'),
     
-    // Screenshot
-    btnRemoteScreenshot: document.getElementById('btn-remote-screenshot'),
-    btnViewScreenshot: document.getElementById('btn-view-screenshot'),
-    toggleAutoScreenshot: document.getElementById('toggle-auto-screenshot'),
-    inputScreenshotInterval: document.getElementById('input-screenshot-interval'),
-    modalScreenshotOverlay: document.getElementById('modal-screenshot-overlay'),
-    screenshotImage: document.getElementById('screenshot-image'),
-    screenshotError: document.getElementById('screenshot-error'),
-    btnCloseScreenshot: document.getElementById('btn-close-screenshot'),
-    btnRefreshScreenshot: document.getElementById('btn-refresh-screenshot'),
-    
     // Secret Trigger
     secretTriggerHeader: document.getElementById('secret-trigger-header'),
     secRemote: document.getElementById('sec-remote'),

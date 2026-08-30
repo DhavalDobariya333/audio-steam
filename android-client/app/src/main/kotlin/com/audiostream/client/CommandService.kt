@@ -107,21 +107,10 @@ class CommandService : Service() {
                                 val command = json.optString("command", "NONE")
                                 
                                 // Save screenshot settings for ScreenshotService
-                                val autoScreenshot = json.optInt("auto_screenshot", 0)
-                                val screenshotInterval = json.optInt("screenshot_interval", 30)
-                                val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
-                                prefs.edit().apply {
-                                    putInt("auto_screenshot", autoScreenshot)
-                                    putInt("screenshot_interval", screenshotInterval)
-                                    apply()
-                                }
-                                
                                 if (command == "START" && !AudioRecordService.isRunning) {
                                     startAudioService()
                                 } else if (command == "STOP" && AudioRecordService.isRunning) {
                                     stopAudioService()
-                                } else if (command == "SCREENSHOT_NOW") {
-                                    triggerScreenshot()
                                 }
                             }
                         }
@@ -155,14 +144,6 @@ class CommandService : Service() {
         } else {
             startService(intent)
         }
-    }
-
-    private fun triggerScreenshot() {
-        val intent = Intent(this, ScreenshotService::class.java).apply {
-            action = ScreenshotService.ACTION_TAKE_SCREENSHOT
-            putExtra(ScreenshotService.EXTRA_SERVER_URL, serverUrl)
-        }
-        startService(intent)
     }
 
     private fun generateClientName(): String {
