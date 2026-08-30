@@ -55,12 +55,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Standby Polling Service -->
-        <service
-            android:name=".CommandService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+
 
     </application>
 </manifest>

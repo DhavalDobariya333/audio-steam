@@ -259,7 +259,7 @@ class MainActivity : AppCompatActivity() {
             tvStatus.setTextColor(Color.parseColor("#10b981"))
             vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
             etServerUrl.isEnabled = false
-        } else if (CommandService.isPolling) {
+        } else if (AudioRecordService.isStandbyMode) {
             btnStart.visibility = View.VISIBLE
             btnStandby.text = "⏹ STOP LISTENING"
             btnStandby.visibility = View.VISIBLE
@@ -283,9 +283,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleStandby() {
-        if (CommandService.isPolling) {
-            val intent = Intent(this, CommandService::class.java).apply {
-                action = CommandService.ACTION_STOP_POLLING
+        if (AudioRecordService.isStandbyMode) {
+            val intent = Intent(this, AudioRecordService::class.java).apply {
+                action = AudioRecordService.ACTION_STOP
             }
             startService(intent)
             appendLog("Standby mode disabled.")
@@ -299,8 +299,8 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putString("server_url", url).apply()
             checkBatteryOptimization()
 
-            val intent = Intent(this, CommandService::class.java).apply {
-                action = CommandService.ACTION_START_POLLING
+            val intent = Intent(this, AudioRecordService::class.java).apply {
+                action = AudioRecordService.ACTION_STANDBY
                 putExtra(AudioRecordService.EXTRA_SERVER_URL, url)
             }
             ContextCompat.startForegroundService(this, intent)

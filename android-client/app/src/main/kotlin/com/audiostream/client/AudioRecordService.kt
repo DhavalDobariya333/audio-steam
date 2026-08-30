@@ -49,6 +49,7 @@ class AudioRecordService : Service() {
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
+        const val ACTION_STANDBY = "ACTION_STANDBY"
         const val ACTION_STATE_UPDATE = "ACTION_STATE_UPDATE"
         const val ACTION_LOG = "ACTION_LOG"
 
@@ -76,6 +77,10 @@ class AudioRecordService : Service() {
         // Keep track of running state
         @Volatile
         var isRunning = false
+            private set
+            
+        @Volatile
+        var isStandbyMode = false
             private set
     }
 
@@ -120,7 +125,11 @@ class AudioRecordService : Service() {
             when (intent.action) {
                 ACTION_START -> {
                     val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: return START_NOT_STICKY
-                    startMonitoring(url)
+                    startMonitoring(url, isStandby = false)
+                }
+                ACTION_STANDBY -> {
+                    val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: return START_NOT_STICKY
+                    startMonitoring(url, isStandby = true)
                 }
                 ACTION_STOP -> {
                     stopMonitoring()
@@ -170,8 +179,8 @@ class AudioRecordService : Service() {
         }
     }
 
-    private fun startMonitoring(url: String) {
-        if (isRunning) return
+    private fun startMonitoring(url: String, isStandby: Boolean = false) {
+        if (isRunning || isStandbyMode) return
 
         serverUrl = url
 
@@ -181,7 +190,7 @@ class AudioRecordService : Service() {
 
         // 1. Create notification channel and start foreground
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
+        startForeground(NOTIFICATION_ID, buildNotification(if (isStandby) "Standby mode..." else "Starting..."))
 
         // 2. Acquire wake lock (4 hour max, renewed on each chunk)
         acquireWakeLock()
@@ -210,29 +219,117 @@ class AudioRecordService : Service() {
         // Register dynamic battery listener
         registerBatteryListener()
 
-        // 4. Start everything
-        isRunning = true
-        connectionMonitor!!.start()
-        uploadManager!!.start()
-        startRecording()
+        // 4. Start everything or standby
+        if (isStandby) {
+            isStandbyMode = true
+            isRunning = false
+            sendLog("Standby mode enabled. Listening for commands...")
+        } else {
+            isStandbyMode = false
+            isRunning = true
+            connectionMonitor!!.start()
+            uploadManager!!.start()
+            startRecording()
+            sendLog("Service started. Client: $clientName")
+        }
 
         // 5. Clean up any temp files from previous sessions
         storageManager!!.cleanupTempFiles()
 
-        // 6. Start notification update loop
+        // 6. Start loops
         startNotificationUpdater()
+        startCommandPolling()
 
-        sendLog("Service started. Client: $clientName")
-        sendLog("Server: $serverUrl")
-        sendLog("Chunk duration: ${chunkDurationSeconds}s")
+        broadcastStateUpdate()
+    }
+
+    private var isPolling = false
+
+    private fun startCommandPolling() {
+        if (isPolling) return
+        isPolling = true
+        serviceScope.launch(Dispatchers.IO) {
+            val httpClient = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .build()
+
+            while (isPolling) {
+                try {
+                    val encodedClientName = java.net.URLEncoder.encode(clientName, "UTF-8")
+                    val status = if (isRunning) "recording" else "idle"
+                    val endpoint = "${serverUrl.trimEnd('/')}/api/v1/broadcasts/command?client_id=$encodedClientName&status=$status"
+                    
+                    val request = Request.Builder().url(endpoint).get().build()
+            
+                    httpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body?.string()
+                            if (body != null) {
+                                val json = JSONObject(body)
+                                val command = json.optString("command", "NONE")
+                                
+                                if (command == "START" && !isRunning) {
+                                    switchToRecording()
+                                } else if (command == "STOP" && isRunning) {
+                                    switchToStandby()
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore transient network errors
+                }
+                delay(15000L) // Poll every 15 seconds
+            }
+        }
+    }
+
+    private fun switchToRecording() {
+        isStandbyMode = false
+        isRunning = true
+        connectionMonitor?.start()
+        uploadManager?.start()
+        startRecording()
+        sendLog("Remote command received: START")
+        broadcastStateUpdate()
+    }
+
+    private fun switchToStandby() {
+        isStandbyMode = true
+        isRunning = false
+        
+        // Stop recording immediately
+        isRecording.set(false)
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
+        } catch (e: Exception) { /* ignore */ }
+        
+        val threadToJoin = recordingThread
+        recordingThread = null
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                threadToJoin?.interrupt()
+                threadToJoin?.join(1000)
+            } catch (e: Exception) { /* ignore */ }
+        }
+        
+        uploadManager?.stop()
+        connectionMonitor?.stop()
+        
+        sendLog("Remote command received: STOP")
         broadcastStateUpdate()
     }
 
     private fun stopMonitoring() {
-        if (!isRunning) return
+        if (!isRunning && !isStandbyMode) return
         isRunning = false
+        isStandbyMode = false
+        isPolling = false
 
-        sendLog("Stopping service...")
+        sendLog("Stopping service completely...")
 
         // Stop recording flag and release AudioRecord FIRST to unblock read() call immediately
         isRecording.set(false)
