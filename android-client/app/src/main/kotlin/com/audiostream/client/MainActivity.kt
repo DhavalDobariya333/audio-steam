@@ -289,6 +289,8 @@ class MainActivity : AppCompatActivity() {
             }
             startService(intent)
             appendLog("Standby mode disabled.")
+            // Update UI immediately — we know we're going to stopped state
+            updateUIForServiceState(false)
         } else {
             val url = etServerUrl.text.toString().trim()
             if (url.isEmpty()) {
@@ -305,9 +307,12 @@ class MainActivity : AppCompatActivity() {
             }
             ContextCompat.startForegroundService(this, intent)
             appendLog("Standby mode enabled. Listening for remote commands...")
+
+            // Update UI immediately to standby state — don't wait for service
+            // Set the companion flags so updateUIForServiceState sees the correct branch
+            AudioRecordService.isStandbyMode = true
+            updateUIForServiceState(false)
         }
-        
-        btnStandby.postDelayed({ updateUIForServiceState(AudioRecordService.isRunning) }, 300)
     }
 
     private fun updateStats(pending: Int, retries: Int, duration: Long,

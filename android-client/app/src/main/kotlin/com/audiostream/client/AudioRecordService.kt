@@ -26,6 +26,8 @@ import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -81,7 +83,6 @@ class AudioRecordService : Service() {
             
         @Volatile
         var isStandbyMode = false
-            private set
     }
 
     // Recording
@@ -269,10 +270,29 @@ class AudioRecordService : Service() {
                                 val json = JSONObject(body)
                                 val command = json.optString("command", "NONE")
                                 
+                                var processed = false
                                 if (command == "START" && !isRunning) {
                                     switchToRecording()
+                                    processed = true
                                 } else if (command == "STOP" && isRunning) {
                                     switchToStandby()
+                                    processed = true
+                                }
+                                
+                                // Acknowledge the command so the server clears it
+                                if (processed) {
+                                    try {
+                                        val jsonBody = JSONObject().put("client_id", clientName).put("command", command).toString()
+                                        val ackBody = jsonBody.toRequestBody("application/json".toMediaType())
+                                        val ackRequest = Request.Builder()
+                                            .url("${serverUrl.trimEnd('/')}/api/v1/broadcasts/command/ack")
+                                            .post(ackBody)
+                                            .build()
+                                        httpClient.newCall(ackRequest).execute().close()
+                                        sendLog("Command ACK sent for: $command")
+                                    } catch (e: Exception) {
+                                        sendLog("Failed to ACK command: ${e.message}")
+                                    }
                                 }
                             }
                         }
@@ -288,9 +308,13 @@ class AudioRecordService : Service() {
     private fun switchToRecording() {
         isStandbyMode = false
         isRunning = true
+        recordingStartTimeMs = System.currentTimeMillis()
+        totalRecordingSeconds = 0L
         connectionMonitor?.start()
         uploadManager?.start()
         startRecording()
+        startNotificationUpdater()
+        updateNotification()
         sendLog("Remote command received: START")
         broadcastStateUpdate()
     }
@@ -316,8 +340,15 @@ class AudioRecordService : Service() {
             } catch (e: Exception) { /* ignore */ }
         }
         
+        // Cancel the notification updater since we're switching to standby stats loop
+        notificationUpdaterJob?.cancel()
+        notificationUpdaterJob = null
+        
         uploadManager?.stop()
         connectionMonitor?.stop()
+        
+        // Update foreground notification to reflect standby state
+        updateNotification()
         
         sendLog("Remote command received: STOP")
         broadcastStateUpdate()
@@ -750,10 +781,11 @@ class AudioRecordService : Service() {
     }
 
     private fun updateNotification() {
-        if (!isRunning) return
+        if (!isRunning && !isStandbyMode) return
         try {
+            val status = if (isRunning) connectionState else "Standby"
             val manager = getSystemService(NotificationManager::class.java)
-            manager.notify(NOTIFICATION_ID, buildNotification(connectionState))
+            manager.notify(NOTIFICATION_ID, buildNotification(status))
         } catch (e: Exception) {
             // Non-critical
         }
@@ -762,10 +794,12 @@ class AudioRecordService : Service() {
     private var notificationUpdaterJob: Job? = null
 
     private fun startNotificationUpdater() {
+        // Cancel any existing updater before starting a new one
+        notificationUpdaterJob?.cancel()
         notificationUpdaterJob = serviceScope.launch {
-            while (isActive && isRunning) {
+            while (isActive && (isRunning || isStandbyMode)) {
                 delay(1000)  // Broadcast live stats to in-app UI every second
-                if (recordingStartTimeMs > 0) {
+                if (isRunning && recordingStartTimeMs > 0) {
                     totalRecordingSeconds = (System.currentTimeMillis() - recordingStartTimeMs) / 1000
                 }
                 withContext(Dispatchers.Main) {

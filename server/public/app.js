@@ -240,21 +240,8 @@ async function fetchDeviceStatus() {
     }
 }
 
-function updateRemoteSelectUI() {
-    if (!ui.remoteClientSelect) return;
-    const currentVal = ui.remoteClientSelect.value;
-    
-    let html = '<option value="">Select Device...</option>';
-    state.deviceStatus.forEach(d => {
-        html += `<option value="${d.client_id}">${d.client_id} (${d.status})</option>`;
-    });
-    
-    ui.remoteClientSelect.innerHTML = html;
-    
-    if (state.deviceStatus.some(d => d.client_id === currentVal)) {
-        ui.remoteClientSelect.value = currentVal;
-    }
-}
+
+
 
 async function fetchActiveSessions() {
     try {
