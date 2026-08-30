@@ -194,63 +194,9 @@ function bindEvents() {
     ui.modalCancel.addEventListener('click', closeModal);
     ui.modalConfirm.addEventListener('click', confirmDelete);
 
-    // Screenshot Events
-    ui.btnRemoteScreenshot.addEventListener('click', () => sendRemoteCommand('SCREENSHOT_NOW'));
-    
-    ui.btnViewScreenshot.addEventListener('click', () => {
-        const client_id = ui.remoteClientSelect.value;
-        if (!client_id) {
-            showToast('Please select a device first', 'error');
-            return;
-        }
-        ui.modalScreenshotOverlay.style.display = 'flex';
-        loadScreenshotImage(client_id);
-    });
-    
-    ui.btnCloseScreenshot.addEventListener('click', () => {
-        ui.modalScreenshotOverlay.style.display = 'none';
-    });
-    
-    ui.btnRefreshScreenshot.addEventListener('click', () => {
-        const client_id = ui.remoteClientSelect.value;
-        if (client_id) loadScreenshotImage(client_id);
-    });
-    
-    const saveScreenshotSettings = () => {
-        const client_id = ui.remoteClientSelect.value;
-        if (!client_id) return;
-        const auto_screenshot = ui.toggleAutoScreenshot.checked;
-        const interval = parseInt(ui.inputScreenshotInterval.value, 10) || 30;
-        
-        fetch(`${API_DASHBOARD}/screenshot-settings`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client_id, auto_screenshot, interval })
-        }).then(res => res.json())
-          .then(data => {
-              if (data.status === 'success') showToast('Screenshot settings saved');
-          }).catch(console.error);
-    };
-    
-    ui.toggleAutoScreenshot.addEventListener('change', saveScreenshotSettings);
-    ui.inputScreenshotInterval.addEventListener('change', saveScreenshotSettings);
-    
-    ui.remoteClientSelect.addEventListener('change', () => {
-        const client_id = ui.remoteClientSelect.value;
-        if (client_id) {
-            // Fetch current settings for this device
-            const device = state.deviceStatus.find(d => d.client_id === client_id);
-            if (device) {
-                // Settings not returned in /devices endpoint currently, let's fetch /command
-                fetch(`/api/v1/broadcasts/command?client_id=${client_id}`)
-                    .then(res => res.json())
-                    .then(data => {
-                        ui.toggleAutoScreenshot.checked = data.auto_screenshot === 1;
-                        ui.inputScreenshotInterval.value = data.screenshot_interval || 30;
-                    }).catch(console.error);
-            }
-        }
-    });
+    // Initial fetch
+    fetchAllData();
+    setInterval(fetchAllData, 5000);
 }
 
 function setViewMode(mode) {
