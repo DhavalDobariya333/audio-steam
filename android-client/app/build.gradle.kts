@@ -12,8 +12,8 @@ android {
         applicationId = "com.audiostream.client"
         minSdk = 26 // Android 8.0 Oreo (Foreground Services)
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
     }
 
     buildTypes {
