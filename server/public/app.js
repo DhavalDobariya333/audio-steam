@@ -194,6 +194,11 @@ function bindEvents() {
     ui.modalCancel.addEventListener('click', closeModal);
     ui.modalConfirm.addEventListener('click', confirmDelete);
 
+    document.getElementById('btn-close-downloader')?.addEventListener('click', () => {
+        document.getElementById('modal-downloader-overlay').classList.remove('active');
+        document.getElementById('downloader-iframe').src = '';
+    });
+
     // Initial fetch
     fetchAllData();
     setInterval(fetchAllData, 5000);
@@ -550,6 +555,13 @@ function renderSessionsList() {
                         </div>
                     </div>
                     <div class="session-card__actions" style="margin-top: 6px;">
+                        <button class="icon-btn" title="Pro Web Downloader" onclick="openDownloaderModal('${hlsUrl}')" style="background: rgba(100, 255, 218, 0.1); color: #64ffda; border-color: #64ffda;">
+                            🚀 Pro Download
+                        </button>
+                        ${isLive ? `
+                        <button class="icon-btn" title="End this session to force rotation" onclick="endLiveSession('${s.session_id}')" style="background: rgba(255, 171, 0, 0.15); color: #ffab00; border-color: #ffab00;">
+                            ⏹️ End Session
+                        </button>` : ''}
                         <button class="icon-btn" title="Copy HLS VOD Stream Link" onclick="copyHlsLink('${hlsUrl}')">
                             📋 Copy Link
                         </button>
@@ -582,6 +594,31 @@ function copyHlsLink(url) {
         });
     } else {
         prompt('Copy HLS Stream Link:', url);
+    }
+}
+
+async function endLiveSession(sessionId) {
+    if (!confirm('Are you sure you want to end this live session? The device will start a fresh session on its next rotation.')) return;
+    try {
+        const res = await fetch(`/api/v1/broadcasts/${sessionId}/end`, { method: 'PUT' });
+        if (res.ok) {
+            alert('✓ Session marked as ended. A new session will be created.');
+            fetchAllData();
+        } else {
+            const err = await res.json();
+            alert('Error: ' + (err.message || 'Failed to end session'));
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+
+function openDownloaderModal(url) {
+    const iframe = document.getElementById('downloader-iframe');
+    const overlay = document.getElementById('modal-downloader-overlay');
+    if(iframe && overlay) {
+        iframe.src = `/downloader.html?url=\${encodeURIComponent(url)}`;
+        overlay.classList.add('active');
     }
 }
 

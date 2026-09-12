@@ -321,30 +321,7 @@ router.put('/:session_id/end', (req: Request, res: Response) => {
     }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-// GET SESSION INFO
-// ════════════════════════════════════════════════════════════════════════════
 
-router.get('/:session_id', (req: Request, res: Response) => {
-    try {
-        const session_id = req.params.session_id as string;
-        const session = db.getSession(session_id);
-        if (!session) {
-            res.status(404).json({ status: 'not_found' });
-            return;
-        }
-
-        const chunks = db.getSessionChunks(session_id);
-
-        res.json({
-            session,
-            chunks_count: chunks.length,
-            latest_sequence: chunks.length > 0 ? chunks[chunks.length - 1].sequence_num : -1,
-        });
-    } catch (err: any) {
-        res.status(500).json({ status: 'error', message: err.message });
-    }
-});
 
 // ════════════════════════════════════════════════════════════════════════════
 // REMOTE CONTROL COMMANDS
@@ -463,4 +440,30 @@ router.post('/upload-screenshot', upload.single('image'), (req: Request, res: Re
     }
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// GET SESSION INFO (Must remain after /command to prevent route shadowing)
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get('/:session_id', (req: Request, res: Response) => {
+    try {
+        const session_id = req.params.session_id as string;
+        const session = db.getSession(session_id);
+        if (!session) {
+            res.status(404).json({ status: 'not_found' });
+            return;
+        }
+
+        const chunks = db.getSessionChunks(session_id);
+
+        res.json({
+            session,
+            chunks_count: chunks.length,
+            latest_sequence: chunks.length > 0 ? chunks[chunks.length - 1].sequence_num : -1,
+        });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 export default router;
+

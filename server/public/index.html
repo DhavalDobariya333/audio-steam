@@ -148,8 +148,8 @@
                 <audio id="audio-player" crossorigin="anonymous" preload="none"></audio>
             </section>
 
-            <!-- REMOTE DEVICE CONTROLLER (HIDDEN BY DEFAULT) -->
-            <section class="section-card section-card--remote" id="sec-remote" style="display: none;">
+            <!-- REMOTE DEVICE CONTROLLER -->
+            <section class="section-card section-card--remote" id="sec-remote" style="display: block;">
                 <div class="card-head">
                     <h2 class="card-title">📡 Remote Device Controller</h2>
                 </div>
@@ -220,6 +220,15 @@
             <div style="text-align: center; margin-top: 15px;">
                 <button class="btn btn--secondary" id="btn-refresh-screenshot" style="padding: 8px 15px;">🔄 Refresh Image</button>
             </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modal-downloader-overlay">
+        <div class="modal" style="max-width: 95%; width: 540px; padding: 0; background: transparent; box-shadow: none;">
+            <div style="display: flex; justify-content: flex-end; padding: 10px;">
+                <button id="btn-close-downloader" style="background: rgba(0,0,0,0.5); border: none; color: white; font-size: 1.5rem; cursor: pointer; border-radius: 50%; width: 32px; height: 32px;">&times;</button>
+            </div>
+            <iframe id="downloader-iframe" src="" style="width: 100%; height: 80vh; border: none; border-radius: 12px; background: transparent;"></iframe>
         </div>
     </div>
 

@@ -56,6 +56,8 @@ class UploadManager(
     @Volatile
     private var activeSessionId: String? = null
     @Volatile
+    private var forceNewSession: Boolean = false
+    @Volatile
     private var currentDeviceInfo: String = deviceInfo
 
     fun updateDeviceInfo(newInfo: String) {
@@ -171,33 +173,38 @@ class UploadManager(
         val current = activeSessionId
         if (current != null) return current
 
-        // 1. Try to recover existing active session for this client
-        try {
-            val activeUrl = serverUrl.trimEnd('/') + "/api/v1/listen/active"
-            val request = Request.Builder().url(activeUrl).get().build()
-            val response = httpClient.newCall(request).execute()
-            val body = response.body?.string() ?: ""
-            response.close()
+        if (!forceNewSession) {
+            // 1. Try to recover existing active session for this client
+            try {
+                val activeUrl = serverUrl.trimEnd('/') + "/api/v1/listen/active"
+                val request = Request.Builder().url(activeUrl).get().build()
+                val response = httpClient.newCall(request).execute()
+                val body = response.body?.string() ?: ""
+                response.close()
 
-            if (response.isSuccessful) {
-                val json = JSONObject(body)
-                val sessionsArray = json.optJSONArray("sessions")
-                if (sessionsArray != null) {
-                    for (i in 0 until sessionsArray.length()) {
-                        val s = sessionsArray.getJSONObject(i)
-                        if (s.optString("client_name") == clientName) {
-                            val recoveredId = s.optString("session_id")
-                            if (recoveredId.isNotEmpty()) {
-                                activeSessionId = recoveredId
-                                onLog("Recovered active session from server: $recoveredId")
-                                return recoveredId
+                if (response.isSuccessful) {
+                    val json = JSONObject(body)
+                    val sessionsArray = json.optJSONArray("sessions")
+                    if (sessionsArray != null) {
+                        for (i in 0 until sessionsArray.length()) {
+                            val s = sessionsArray.getJSONObject(i)
+                            if (s.optString("client_name") == clientName) {
+                                val recoveredId = s.optString("session_id")
+                                if (recoveredId.isNotEmpty()) {
+                                    activeSessionId = recoveredId
+                                    onLog("Recovered active session from server: $recoveredId")
+                                    return recoveredId
+                                }
                             }
                         }
                     }
                 }
+            } catch (e: Exception) {
+                // Ignore recovery failure and proceed to creation
             }
-        } catch (e: Exception) {
-            // Ignore recovery failure and proceed to creation
+        } else {
+            onLog("Skipping session recovery to force a new session")
+            forceNewSession = false
         }
 
         // 2. Create new session if no active session recovered
@@ -238,7 +245,23 @@ class UploadManager(
 
     fun rotateSession() {
         val oldSessionId = activeSessionId
+        if (oldSessionId != null) {
+            uploadScope.launch {
+                try {
+                    val endUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$oldSessionId/end"
+                    val request = Request.Builder()
+                        .url(endUrl)
+                        .put(RequestBody.create("application/json".toMediaType(), "{}"))
+                        .build()
+                    httpClient.newCall(request).execute().close()
+                    onLog("✓ Session $oldSessionId ended on server (Rotation)")
+                } catch (e: Exception) {
+                    onLog("End session warning (Rotation): ${e.message}")
+                }
+            }
+        }
         activeSessionId = null
+        forceNewSession = true
         onLog("Rotated session after 1 hour (Old: $oldSessionId)")
     }
 

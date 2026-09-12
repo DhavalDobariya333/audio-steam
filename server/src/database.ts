@@ -201,7 +201,7 @@ export function getActiveSessions(): Session[] {
 
 export function endSession(sessionId: string): boolean {
     const now = new Date().toISOString();
-    execute("UPDATE sessions SET status = 'ended', ended_at = ?, updated_at = ? WHERE session_id = ? AND status = 'live'", [now, now, sessionId]);
+    execute("UPDATE sessions SET status = 'ended', ended_at = ? WHERE session_id = ? AND status = 'live'", [now, sessionId]);
     return getDb().getRowsModified() > 0;
 }
 
