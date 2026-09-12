@@ -91,7 +91,7 @@ async function start(): Promise<void> {
     // 4. Stale session auto-cleanup (every 30s)
     const staleInterval = setInterval(() => {
         try {
-            const ended = cleanupStaleSessions(60);
+            const ended = cleanupStaleSessions(300);
             for (const id of ended) {
                 finalizeHLS(id);
                 console.log(`[server] Auto-ended stale session: ${id}`);

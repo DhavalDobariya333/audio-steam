@@ -98,6 +98,9 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
                 `Live Stream - ${clientName}`
             );
             console.log(`[broadcast] Auto-recovered live session for chunk: ${session_id} (${clientName})`);
+        } else if (session.status !== 'live') {
+            db.reactivateSession(session_id);
+            console.log(`[broadcast] Reactivated ended session to live on chunk ingest: ${session_id}`);
         }
 
         // Get sequence number from body or auto-increment
@@ -326,6 +329,24 @@ router.put('/:session_id/end', (req: Request, res: Response) => {
         });
     } catch (err: any) {
         console.error('[broadcast] End session error:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+router.put('/:session_id/activate', (req: Request, res: Response) => {
+    try {
+        const session_id = req.params.session_id as string;
+        let session = db.getSession(session_id);
+        if (!session) {
+            storage.createSessionDirs(session_id);
+            const clientName = (req.body && req.body.client_name) || 'Realme-RMX2040';
+            session = db.createSession(session_id, clientName, 'Android Device (Live)', `Live Stream - ${clientName}`);
+        } else {
+            db.reactivateSession(session_id);
+        }
+        console.log(`[broadcast] Session activated/resumed as live: ${session_id}`);
+        res.json({ status: 'live', session_id, message: 'Session is now live.' });
+    } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }
 });

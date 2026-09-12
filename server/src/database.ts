@@ -242,9 +242,13 @@ export function getSessionCount(): number {
     return row?.cnt ?? 0;
 }
 
+export function reactivateSession(sessionId: string): void {
+    execute("UPDATE sessions SET status = 'live', ended_at = NULL WHERE session_id = ?", [sessionId]);
+}
+
 export function updateSessionStats(sessionId: string, chunkSize: number, durationMs: number): void {
     execute(
-        `UPDATE sessions SET total_chunks = total_chunks + 1, total_bytes = total_bytes + ?, total_duration = total_duration + ? WHERE session_id = ?`,
+        `UPDATE sessions SET status = 'live', ended_at = NULL, total_chunks = total_chunks + 1, total_bytes = total_bytes + ?, total_duration = total_duration + ? WHERE session_id = ?`,
         [chunkSize, durationMs / 1000.0, sessionId]
     );
 }

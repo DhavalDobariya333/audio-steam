@@ -561,7 +561,10 @@ function renderSessionsList() {
                         ${isLive ? `
                         <button class="icon-btn" title="End this session to force rotation" onclick="endLiveSession('${s.session_id}')" style="background: rgba(255, 171, 0, 0.15); color: #ffab00; border-color: #ffab00;">
                             ⏹️ End Session
-                        </button>` : ''}
+                        </button>` : `
+                        <button class="icon-btn" title="Reactivate session as LIVE" onclick="activateSession('${s.session_id}')" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: #10b981;">
+                            ▶️ Make Live
+                        </button>`}
                         <button class="icon-btn" title="Copy HLS VOD Stream Link" onclick="copyHlsLink('${hlsUrl}')">
                             📋 Copy Link
                         </button>
@@ -607,6 +610,21 @@ async function endLiveSession(sessionId) {
         } else {
             const err = await res.json();
             alert('Error: ' + (err.message || 'Failed to end session'));
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+
+async function activateSession(sessionId) {
+    try {
+        const res = await fetch(`/api/v1/broadcasts/${sessionId}/activate`, { method: 'PUT' });
+        if (res.ok) {
+            alert('✓ Session reactivated as LIVE!');
+            fetchAllData();
+        } else {
+            const err = await res.json();
+            alert('Error: ' + (err.message || 'Failed to reactivate session'));
         }
     } catch (e) {
         alert('Network error: ' + e.message);
