@@ -43,7 +43,7 @@ const upload = multer({
 
 router.post('/', (req: Request, res: Response) => {
     try {
-        const sessionId = uuidv4();
+        const sessionId = req.body?.session_id || uuidv4();
         const { client_name, device_info, title } = req.body || {};
 
         // Create storage directories
@@ -84,11 +84,20 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             return;
         }
 
-        // Verify session exists
-        const session = db.getSession(session_id);
+        // Verify session exists or auto-recover if missing (e.g. after server restart)
+        let session = db.getSession(session_id);
         if (!session) {
-            res.status(404).json({ status: 'error', message: 'Session not found' });
-            return;
+            storage.createSessionDirs(session_id);
+            const clientName = (req.body && req.body.client_name) 
+                || (db.getAllDeviceCommands()[0]?.client_id) 
+                || 'Realme-RMX2040';
+            session = db.createSession(
+                session_id,
+                clientName,
+                'Android Device (Live)',
+                `Live Stream - ${clientName}`
+            );
+            console.log(`[broadcast] Auto-recovered live session for chunk: ${session_id} (${clientName})`);
         }
 
         // Get sequence number from body or auto-increment
