@@ -59,14 +59,16 @@ export function checkFfmpeg(): boolean {
 export async function appendToHLS(
     sessionId: string,
     chunkPath: string,
-    sequenceNum: number
+    sequenceNum: number,
+    clientTimestamp?: string
 ): Promise<boolean> {
     if (!ffmpegAvailable) return false;
 
     const hlsDir = getHlsDir(sessionId);
     fs.mkdirSync(hlsDir, { recursive: true });
 
-    const segmentFilename = `seg_${sequenceNum.toString().padStart(6, '0')}.ts`;
+    let dateStr = clientTimestamp ? clientTimestamp.replace(/[:.]/g, '-') : new Date().toISOString().replace(/[:.]/g, '-');
+    const segmentFilename = `seg_${sequenceNum.toString().padStart(6, '0')}_${dateStr}.ts`;
     const segmentPath = path.join(hlsDir, segmentFilename);
 
     // ── Step 1: Transcode raw chunk → AAC .ts segment ──

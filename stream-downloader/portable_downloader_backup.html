@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Downloader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #fafafa;
+            --surface-color: #ffffff;
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --primary-color: #000000;
+            --primary-hover: #374151;
+            --success-color: #10b981;
+            --danger-color: #ef4444;
+            --warning-color: #f59e0b;
+            --radius: 12px;
+            --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #0f1115;
+                --surface-color: #16181d;
+                --text-primary: #f9fafb;
+                --text-secondary: #9ca3af;
+                --border-color: #2d3139;
+                --primary-color: #ffffff;
+                --primary-hover: #e5e7eb;
+            }
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color); 
+            color: var(--text-primary);
+            line-height: 1.5;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .app-container {
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 32px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+            position: relative;
+            margin-top: 20px;
+        }
+
+        h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 600; }
+        p.subtitle { margin: 0 0 24px 0; color: var(--text-secondary); font-size: 14px; }
+
+        .input-group { position: relative; margin-bottom: 16px; }
+        label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 8px; color: var(--text-secondary); }
+
+        input[type="text"], input[type="url"], select {
+            width: 100%; padding: 14px 16px; background-color: var(--bg-color);
+            border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary);
+            font-size: 15px; transition: var(--transition); outline: none; appearance: none;
+        }
+
+        input:focus, select:focus { border-color: var(--primary-color); box-shadow: 0 0 0 3px rgba(156, 163, 175, 0.2); }
+
+        /* Settings Toggle */
+        .settings-toggle {
+            display: flex; align-items: center; justify-content: center; background: none; border: none;
+            color: var(--text-secondary); font-size: 13px; cursor: pointer; margin: 0 auto 24px auto; padding: 8px; font-weight: 500;
+        }
+        .settings-toggle:hover { color: var(--text-primary); }
+
+        .settings-panel {
+            display: none; background: var(--bg-color); border: 1px solid var(--border-color);
+            padding: 16px; border-radius: 8px; margin-bottom: 24px;
+        }
+        .settings-panel.active { display: block; }
+        .settings-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+
+        .slider-container { display: flex; align-items: center; justify-content: space-between; }
+        input[type="range"] { flex: 1; margin: 0 16px; }
+        .val-badge { background: var(--border-color); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+
+        /* Checkbox */
+        .toggle-switch {
+            position: relative; display: inline-block; width: 40px; height: 24px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--success-color); }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+        .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+        .radio-card { position: relative; display: flex; align-items: center; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; transition: var(--transition); }
+        .radio-card:hover { border-color: var(--text-secondary); }
+        .radio-card input[type="radio"] { position: absolute; opacity: 0; }
+        .radio-card .content { display: flex; flex-direction: column; margin-left: 8px; }
+        .radio-card .title { font-size: 14px; font-weight: 500; }
+        .radio-card .desc { font-size: 12px; color: var(--text-secondary); }
+        .radio-card input[type="radio"]:checked + .content { color: var(--primary-color); }
+        .radio-card input[type="radio"]:checked ~ .border-active { position: absolute; inset: -1px; border: 2px solid var(--primary-color); border-radius: 8px; pointer-events: none; }
+
+        .btn {
+            width: 100%; padding: 14px; background-color: var(--primary-color); color: var(--bg-color);
+            border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; transition: var(--transition);
+        }
+        .btn:hover { background-color: var(--primary-hover); transform: translateY(-1px); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        
+        .action-row { display: flex; gap: 8px; margin-top: 12px; }
+        .btn-secondary { background-color: transparent; color: var(--text-primary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover { background-color: var(--bg-color); }
+        .btn-danger { background-color: transparent; color: var(--danger-color); border: 1px solid var(--danger-color); }
+        .btn-danger:hover { background-color: var(--danger-color); color: white; }
+
+        /* Progress Area */
+        .progress-area { display: none; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-color); }
+        .stats-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+        .progress-bar-bg { width: 100%; height: 6px; background-color: var(--border-color); border-radius: 3px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background-color: var(--primary-color); width: 0%; transition: width 0.3s ease-out; }
+        .status-text { font-size: 13px; font-weight: 500; margin-top: 12px; text-align: center; }
+        .status-success { color: var(--success-color); }
+        .status-error { color: var(--danger-color); }
+        .status-warning { color: var(--warning-color); }
+
+        /* Mini Log */
+        .mini-log {
+            margin-top: 16px; font-size: 11px; color: var(--text-secondary); font-family: monospace;
+            background: var(--bg-color); padding: 8px; border-radius: 6px; height: 80px; overflow-y: auto;
+            border: 1px solid var(--border-color);
+        }
+        .mini-log div { margin-bottom: 2px; }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <h2>HLS Downloader</h2>
+    <p class="subtitle">Minimal, robust, and entirely in your browser.</p>
+    
+    <div class="input-group">
+        <label>Playlist URL (.m3u8)</label>
+        <input type="url" id="urlInput" list="historyList" placeholder="https://example.com/stream/vod.m3u8" autocomplete="off">
+        <datalist id="historyList"></datalist>
+    </div>
+
+    <button class="settings-toggle" onclick="toggleSettings()">⚙️ Advanced Settings</button>
+    
+    <div class="settings-panel" id="settingsPanel">
+        <div class="settings-row">
+            <div>
+                <span style="font-size:13px; font-weight:500; display:block;">Universal CORS Proxy</span>
+                <span style="font-size:11px; color:var(--text-secondary);">Bypasses strict external server blocks</span>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="corsProxyToggle">
+                <span class="slider"></span>
+            </label>
+        </div>
+
+        <label>Custom Filename</label>
+        <input type="text" id="filenameInput" placeholder="Auto-detect from URL" style="margin-bottom: 16px;">
+        
+        <label>Parallel Connections</label>
+        <div class="slider-container">
+            <input type="range" id="concurrencySlider" min="1" max="16" value="8" oninput="document.getElementById('cVal').innerText = this.value">
+            <span class="val-badge" id="cVal">8</span>
+        </div>
+    </div>
+
+    <label>Output Format</label>
+    <div class="options-grid">
+        <label class="radio-card">
+            <input type="radio" name="outputType" value="merge" checked>
+            <div class="content">
+                <span class="title">Merged .ts</span>
+                <span class="desc">Single audio/video</span>
+            </div>
+            <div class="border-active"></div>
+        </label>
+        
+        <label class="radio-card">
+            <input type="radio" name="outputType" value="zip">
+            <div class="content">
+                <span class="title">ZIP Archive</span>
+                <span class="desc">All raw chunks</span>
+            </div>
+            <div class="border-active"></div>
+        </label>
+    </div>
+
+    <button class="btn" id="startBtn" onclick="startDownload()">Download Stream</button>
+
+    <div class="progress-area" id="progressArea">
+        <div class="stats-row">
+            <span id="speedTxt">0 MB/s</span>
+            <span id="estimateTxt">Size: --</span>
+            <span id="progressTxt">0 / 0</span>
+        </div>
+        <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+        <div class="status-text" id="statusTxt">Initializing...</div>
+        <div class="mini-log" id="miniLog"></div>
+        
+        <div class="action-row">
+            <button class="btn btn-secondary" id="pauseBtn" onclick="togglePause()">Pause</button>
+            <button class="btn btn-danger" id="cancelBtn" onclick="cancelDownload()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Web Worker Code (Blob) ---
+    const workerCode = `
+        let isCancelled = false;
+        let isPaused = false;
+        let cryptoKey = null;
+        let aesIv = null;
+        let useCorsProxy = false;
+
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        function getProxiedUrl(url) {
+            if (!useCorsProxy) return url;
+            return 'https://corsproxy.io/?' + encodeURIComponent(url);
+        }
+
+        async function setupCrypto(keyBuffer, ivHex) {
+            cryptoKey = await crypto.subtle.importKey("raw", keyBuffer, { name: "AES-CBC" }, false, ["decrypt"]);
+            ivHex = ivHex.startsWith('0x') ? ivHex.slice(2) : ivHex;
+            ivHex = ivHex.padStart(32, '0');
+            aesIv = new Uint8Array(ivHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+        }
+
+        async function fetchWithRetry(url, retries = 3) {
+            const finalUrl = getProxiedUrl(url);
+            for (let i = 0; i < retries; i++) {
+                if (isCancelled) throw new Error("Cancelled");
+                try {
+                    const res = await fetch(finalUrl);
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const buf = await res.arrayBuffer();
+                    let data = new Uint8Array(buf);
+                    
+                    if (cryptoKey && aesIv) {
+                        const decrypted = await crypto.subtle.decrypt({ name: "AES-CBC", iv: aesIv }, cryptoKey, data);
+                        data = new Uint8Array(decrypted);
+                    }
+                    return data;
+                } catch (e) {
+                    if (i === retries - 1) throw e;
+                    await sleep(1000 * (i + 1));
+                }
+            }
+        }
+
+        self.onmessage = async function(e) {
+            const { type, payload } = e.data;
+            if (type === 'CANCEL') { isCancelled = true; } 
+            else if (type === 'PAUSE') { isPaused = payload.isPaused; }
+            else if (type === 'START') {
+                isCancelled = false;
+                isPaused = false;
+                
+                const { chunks, baseUrl, concurrency, keyBuffer, ivHex, corsProxy, isDirectToDisk } = payload;
+                useCorsProxy = corsProxy;
+                
+                if (keyBuffer && ivHex) {
+                    try { await setupCrypto(keyBuffer, ivHex); }
+                    catch(err) { self.postMessage({ type: 'ERROR', payload: { error: "Decryption setup failed: " + err.message } }); return; }
+                }
+
+                const total = chunks.length;
+                const results = new Array(total);
+                let completed = 0;
+                let currentIndex = 0;
+
+                return new Promise((resolve) => {
+                    const processNext = async () => {
+                        if (isCancelled) return;
+                        while (isPaused && !isCancelled) { await sleep(200); }
+                        if (isCancelled) return;
+                        
+                        const index = currentIndex++;
+                        if (index >= total) return;
+                        
+                        const filename = chunks[index];
+                        const url = filename.startsWith('http') ? filename : baseUrl + filename;
+                        const startTime = Date.now();
+                        
+                        try {
+                            const data = await fetchWithRetry(url);
+                            if (!isDirectToDisk) results[index] = data;
+                            completed++;
+                            
+                            const duration = (Date.now() - startTime) / 1000;
+                            const speed = data.length / Math.max(duration, 0.01); 
+                            
+                            self.postMessage({ type: 'PROGRESS', payload: { index, filename, completed, total, speed, size: data.length, data: isDirectToDisk ? data : null } });
+                        } catch (err) {
+                            self.postMessage({ type: 'ERROR', payload: { filename, error: err.message } });
+                            isCancelled = true;
+                        }
+                        
+                        if (completed === total && !isCancelled) {
+                            self.postMessage({ type: 'DONE', payload: { results, chunks } });
+                        } else if (!isCancelled) {
+                            processNext();
+                        }
+                    };
+
+                    for (let i = 0; i < Math.min(concurrency, total); i++) { processNext(); }
+                });
+            }
+        };
+    `;
+
+    // Global App State
+    let worker;
+    let isPaused = false;
+    let speedHistory = [];
+    let avgChunkSize = 0;
+    
+    // Direct-to-disk vars
+    let writableStream = null;
+    let isDirectToDisk = false;
+    let nextChunkToWrite = 0;
+    let pendingChunks = {};
+    
+    const el = {
+        urlInput: document.getElementById('urlInput'),
+        startBtn: document.getElementById('startBtn'),
+        pauseBtn: document.getElementById('pauseBtn'),
+        cancelBtn: document.getElementById('cancelBtn'),
+        progressArea: document.getElementById('progressArea'),
+        progressFill: document.getElementById('progressFill'),
+        progressTxt: document.getElementById('progressTxt'),
+        speedTxt: document.getElementById('speedTxt'),
+        estimateTxt: document.getElementById('estimateTxt'),
+        statusTxt: document.getElementById('statusTxt'),
+        miniLog: document.getElementById('miniLog'),
+        historyList: document.getElementById('historyList'),
+        settingsPanel: document.getElementById('settingsPanel'),
+        customFilename: document.getElementById('filenameInput'),
+        concurrencySlider: document.getElementById('concurrencySlider'),
+        corsProxyToggle: document.getElementById('corsProxyToggle')
+    };
+
+    window.onload = () => {
+        loadHistory();
+        
+        // Query params logic (Auto Start)
+        const urlParams = new URLSearchParams(window.location.search);
+        const autoUrl = urlParams.get('url');
+        if (autoUrl) el.urlInput.value = autoUrl;
+        
+        if (urlParams.get('autoStart') === 'true' && autoUrl) {
+            setTimeout(startDownload, 100);
+        }
+    };
+
+    function toggleSettings() { el.settingsPanel.classList.toggle('active'); }
+
+    function log(msg, isError = false) {
+        const div = document.createElement('div');
+        div.textContent = `> ${msg}`;
+        if (isError) div.style.color = 'var(--danger-color)';
+        el.miniLog.appendChild(div);
+        el.miniLog.scrollTop = el.miniLog.scrollHeight;
+    }
+
+    function setStatus(msg, type = '') {
+        el.statusTxt.textContent = msg;
+        el.statusTxt.className = `status-text ${type}`;
+    }
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(2) + ' MB';
+    }
+
+    function loadHistory() {
+        try {
+            const history = JSON.parse(localStorage.getItem('hls_history') || '[]');
+            el.historyList.innerHTML = history.map(url => `<option value="${url}">`).join('');
+        } catch(e) {}
+    }
+
+    function saveHistory(url) {
+        try {
+            let history = JSON.parse(localStorage.getItem('hls_history') || '[]');
+            history = [url, ...history.filter(u => u !== url)].slice(0, 5);
+            localStorage.setItem('hls_history', JSON.stringify(history));
+            loadHistory();
+        } catch(e) {}
+    }
+
+    function extractSmartFilename(url) {
+        try {
+            const parts = new URL(url).pathname.split('/');
+            for (let i = parts.length - 1; i >= 0; i--) {
+                if (parts[i] && !parts[i].endsWith('.m3u8') && parts[i] !== 'hls') return parts[i];
+            }
+        } catch(e) {}
+        return `stream_${Date.now()}`;
+    }
+
+    function getProxiedUrl(url) {
+        if (!el.corsProxyToggle.checked) return url;
+        return 'https://corsproxy.io/?' + encodeURIComponent(url);
+    }
+
+    async function parsePlaylist(url) {
+        let res = await fetch(getProxiedUrl(url));
+        if (!res.ok) throw new Error("Failed to fetch m3u8 playlist");
+        let text = await res.text();
+
+        // Check if Master Playlist (Stream Resolver)
+        if (text.includes('#EXT-X-STREAM-INF')) {
+            log("🔎 Master Playlist detected! Resolving highest quality stream...");
+            const lines = text.split('\n');
+            let highestBw = 0;
+            let bestUri = null;
+            
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].includes('#EXT-X-STREAM-INF')) {
+                    const bwMatch = lines[i].match(/BANDWIDTH=(\d+)/);
+                    if (bwMatch && parseInt(bwMatch[1]) > highestBw) {
+                        highestBw = parseInt(bwMatch[1]);
+                        bestUri = lines[i + 1].trim();
+                    }
+                }
+            }
+            if (bestUri) {
+                const absoluteBestUri = bestUri.startsWith('http') ? bestUri : new URL(bestUri, url).href;
+                log(`🎯 Selected highest quality stream (Bandwidth: ${highestBw}). Fetching sub-playlist...`);
+                // Fetch the actual media playlist
+                url = absoluteBestUri;
+                res = await fetch(getProxiedUrl(url));
+                if (!res.ok) throw new Error("Failed to fetch resolved m3u8 sub-playlist");
+                text = await res.text();
+            }
+        }
+
+        const chunks = text.match(/^[^#\n].*?\.ts$/gm) || text.match(/^seg_.*?\.ts$/gm);
+        if (!chunks || chunks.length === 0) throw new Error("No .ts chunks found!");
+
+        let keyBuffer = null, ivHex = null;
+        const keyMatch = text.match(/#EXT-X-KEY:METHOD=AES-128,URI="(.*?)".*?IV=(0x[0-9A-Fa-f]+)/);
+        if (keyMatch) {
+            log("🔒 AES-128 Encryption detected. Fetching key...");
+            const keyUrl = new URL(keyMatch[1], url).href;
+            ivHex = keyMatch[2];
+            const keyRes = await fetch(getProxiedUrl(keyUrl));
+            if (!keyRes.ok) throw new Error("Failed to fetch decryption key");
+            keyBuffer = await keyRes.arrayBuffer();
+            log("Key acquired successfully.");
+        }
+        
+        return { chunks, keyBuffer, ivHex, finalUrl: url };
+    }
+
+    async function startDownload() {
+        const originalUrl = el.urlInput.value.trim();
+        if (!originalUrl) return alert("Please enter a valid URL");
+
+        saveHistory(originalUrl);
+        el.startBtn.disabled = true;
+        el.urlInput.disabled = true;
+        el.progressArea.style.display = 'block';
+        el.progressFill.style.width = '0%';
+        el.progressTxt.textContent = '0 / 0 chunks';
+        el.speedTxt.textContent = '0 MB/s';
+        el.estimateTxt.textContent = 'Size: --';
+        el.miniLog.innerHTML = '';
+        el.pauseBtn.textContent = 'Pause';
+        el.pauseBtn.disabled = false;
+        isPaused = false;
+        speedHistory = [];
+        avgChunkSize = 0;
+        
+        isDirectToDisk = false;
+        writableStream = null;
+        nextChunkToWrite = 0;
+        pendingChunks = {};
+
+        const outputType = document.querySelector('input[name="outputType"]:checked').value;
+        if (outputType === 'merge' && window.showSaveFilePicker) {
+            try {
+                const customName = el.customFilename.value.trim() || extractSmartFilename(originalUrl);
+                const fileHandle = await window.showSaveFilePicker({ 
+                    suggestedName: customName + '.ts',
+                    types: [{ description: 'Media File', accept: {'video/MP2T': ['.ts']} }]
+                });
+                writableStream = await fileHandle.createWritable();
+                isDirectToDisk = true;
+                log("Started True RAM-Safe Direct-to-Disk Stream");
+            } catch(e) {
+                log("File picker cancelled. Falling back to RAM Merge.", true);
+            }
+        }
+
+        setStatus("Fetching playlist...");
+        log("Fetching: " + originalUrl);
+
+        try {
+            const { chunks, keyBuffer, ivHex, finalUrl } = await parsePlaylist(originalUrl);
+            const baseUrl = finalUrl.substring(0, finalUrl.lastIndexOf('/') + 1);
+            
+            log(`Found ${chunks.length} chunks. Starting engine...`);
+            setStatus("Downloading...");
+
+            if (worker) worker.terminate();
+            worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: 'application/javascript' })));
+            worker.onmessage = (e) => handleWorkerMessage(e.data);
+            
+            worker.postMessage({
+                type: 'START',
+                payload: { 
+                    chunks, 
+                    baseUrl, 
+                    concurrency: parseInt(el.concurrencySlider.value) || 8, 
+                    keyBuffer, 
+                    ivHex,
+                    corsProxy: el.corsProxyToggle.checked,
+                    isDirectToDisk
+                }
+            });
+        } catch (err) {
+            log(err.message, true);
+            setStatus("Failed", "status-error");
+            cleanup();
+        }
+    }
+
+    function togglePause() {
+        if (!worker) return;
+        isPaused = !isPaused;
+        worker.postMessage({ type: 'PAUSE', payload: { isPaused } });
+        if (isPaused) {
+            el.pauseBtn.textContent = 'Resume';
+            setStatus("Paused", "status-warning");
+            log("Download paused.");
+        } else {
+            el.pauseBtn.textContent = 'Pause';
+            setStatus("Downloading...");
+            log("Download resumed.");
+        }
+    }
+
+    function cancelDownload() {
+        if (worker) {
+            worker.postMessage({ type: 'CANCEL' });
+            worker.terminate();
+            log("Cancelled by user.", true);
+            setStatus("Cancelled", "status-error");
+        }
+        cleanup();
+    }
+
+    function cleanup() {
+        el.startBtn.disabled = false;
+        el.urlInput.disabled = false;
+        el.pauseBtn.disabled = true;
+    }
+
+    async function handleWorkerMessage(msg) {
+        if (msg.type === 'PROGRESS') {
+            const { completed, total, speed, size, filename, index, data } = msg.payload;
+            speedHistory.push(speed);
+            if (speedHistory.length > 20) speedHistory.shift();
+            const avgSpeed = speedHistory.reduce((a,b) => a+b, 0) / speedHistory.length;
+            
+            if (completed < 10) {
+                avgChunkSize = (avgChunkSize * (completed - 1) + size) / completed;
+                el.estimateTxt.textContent = `Size: ~${formatSize(avgChunkSize * total)}`;
+            }
+            
+            el.progressTxt.textContent = `${completed} / ${total}`;
+            el.speedTxt.textContent = `${formatSize(avgSpeed)}/s`;
+            el.progressFill.style.width = `${(completed / total) * 100}%`;
+            log(`Downloaded: ${filename}`);
+
+            // Write to disk immediately if RAM-Safe mode is active
+            if (isDirectToDisk && writableStream && data) {
+                pendingChunks[index] = data;
+                while (pendingChunks[nextChunkToWrite]) {
+                    try {
+                        await writableStream.write(pendingChunks[nextChunkToWrite]);
+                        delete pendingChunks[nextChunkToWrite];
+                        nextChunkToWrite++;
+                    } catch (e) {
+                        log("Disk Write Error: " + e.message, true);
+                        break;
+                    }
+                }
+            }
+        } 
+        else if (msg.type === 'ERROR') { log(`Error: ${msg.payload.error}`, true); }
+        else if (msg.type === 'DONE') {
+            log("All chunks downloaded successfully!");
+            el.cancelBtn.disabled = true;
+            el.pauseBtn.disabled = true;
+
+            if (isDirectToDisk && writableStream) {
+                await writableStream.close();
+                setStatus("Download Complete!", "status-success");
+                log("Saved directly to disk with 0 RAM accumulation!");
+                cleanup();
+            } else {
+                setStatus("Processing output...", "");
+                const outputType = document.querySelector('input[name="outputType"]:checked').value;
+                const customName = el.customFilename.value.trim() || extractSmartFilename(el.urlInput.value);
+                await processOutput(msg.payload.results, msg.payload.chunks, outputType, customName);
+            }
+        }
+    }
+
+    // Deprecated standalone streamToDisk (Replaced by real-time streaming)
+
+    async function processOutput(dataArrays, filenames, outputType, baseName) {
+        try {
+            if (outputType === 'merge') {
+                const fullName = `${baseName}.ts`;
+                
+                // Fallback to memory merge
+                log("Merging into single file (RAM Merge)...");
+                const totalLength = dataArrays.reduce((acc, val) => acc + (val ? val.length : 0), 0);
+                const merged = new Uint8Array(totalLength);
+                let offset = 0;
+                for (let arr of dataArrays) { 
+                    if (arr) {
+                        merged.set(arr, offset); 
+                        offset += arr.length; 
+                    }
+                }
+                triggerDownload(new Blob([merged], { type: 'video/MP2T' }), fullName);
+            } 
+            else if (outputType === 'zip') {
+                log("Building ZIP archive...");
+                const zip = new JSZip();
+                dataArrays.forEach((data, i) => { if(data) zip.file(filenames[i], data) });
+                const zipBlob = await zip.generateAsync({ type: "blob" });
+                triggerDownload(zipBlob, `${baseName}.zip`);
+            }
+            setStatus("Download Complete!", "status-success");
+            log("Done.");
+        } catch (err) {
+            log(`Processing Error: ${err.message}`, true);
+            setStatus("Error saving file", "status-error");
+        } finally {
+            cleanup();
+            el.cancelBtn.disabled = false;
+        }
+    }
+
+    function triggerDownload(blob, filename) {
+        log(`Triggering download for ${filename}...`);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+</script>
+
+</body>
+</html>

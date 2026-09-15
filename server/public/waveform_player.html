@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>10-Hour Audio Chunked Player</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/timeline.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/hover.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: #151b2b;
+            --primary: #00ff88;
+            --primary-glow: rgba(0, 255, 136, 0.4);
+            --text-main: #ffffff;
+            --text-muted: #8892b0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .player-container {
+            background-color: var(--card-bg);
+            border-radius: 24px;
+            padding: 40px;
+            width: 100%;
+            max-width: 900px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+        }
+
+        .header { text-align: center; }
+        .header h1 { font-size: 2rem; font-weight: 600; margin-bottom: 8px; background: linear-gradient(135deg, #fff, #a5b4fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header p { color: var(--text-muted); font-size: 1rem; }
+        
+        .alert-box { background: rgba(0,255,136,0.1); border-left: 4px solid var(--primary); padding: 10px 15px; font-size: 0.9rem; border-radius: 4px; color: #a5b4fc; }
+
+        .drop-zone { border: 2px dashed rgba(255,255,255,0.2); border-radius: 16px; padding: 40px 20px; text-align: center; transition: all 0.3s ease; cursor: pointer; }
+        .drop-zone:hover { border-color: var(--primary); background: rgba(0, 255, 136, 0.05); box-shadow: 0 0 20px var(--primary-glow); }
+        .drop-zone p { color: var(--text-muted); font-size: 1.1rem; pointer-events: none; }
+        #file-input { display: none; }
+
+        .waveform-wrapper { display: none; flex-direction: column; gap: 15px; }
+        #waveform { width: 100%; height: 120px; border-radius: 8px; overflow: hidden; background: rgba(0,0,0,0.2); opacity: 1; transition: opacity 0.3s; }
+        #waveform.loading { opacity: 0.3; pointer-events: none; }
+        #wave-timeline { width: 100%; color: var(--text-muted); font-size: 0.8rem; }
+
+        .window-controls { display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); padding: 10px 20px; border-radius: 8px; }
+        .window-btn { background: rgba(255,255,255,0.1); border: none; color: #fff; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-family: 'Outfit'; font-weight: 600; transition: 0.2s; }
+        .window-btn:hover:not(:disabled) { background: var(--primary); color: #000; box-shadow: 0 0 10px var(--primary-glow); }
+        .window-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #window-info { font-weight: 600; color: var(--primary); letter-spacing: 1px; }
+
+        .controls { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+        .play-btn { background: var(--primary); color: #000; border: none; border-radius: 50%; width: 60px; height: 60px; font-size: 1.5rem; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 0 15px var(--primary-glow); }
+        .play-btn:hover { transform: scale(1.05); box-shadow: 0 0 25px var(--primary-glow); }
+        .time-info { font-variant-numeric: tabular-nums; font-size: 1.2rem; color: #fff; background: rgba(0,0,0,0.3); padding: 8px 16px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+
+    <div class="player-container">
+        <div class="header">
+            <h1>10-Hour Chunked Viewer</h1>
+            <p>Smart visualizer that only loads 5 minutes at a time to prevent browser crashes.</p>
+        </div>
+        
+        <div class="alert-box">
+            <strong>How it works:</strong> The full audio streams instantly, but the visual waveform is sliced into 5-minute windows on-the-fly to save memory!
+        </div>
+
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+            <p>Drag & Drop your huge <strong>merged_output.mp3</strong> here<br><br>or click to browse</p>
+            <input type="file" id="file-input" accept="audio/*">
+        </div>
+
+        <div class="waveform-wrapper" id="waveform-wrapper">
+            <div class="window-controls">
+                <button class="window-btn" id="prev-window-btn">⬅ Prev 5 Mins</button>
+                <span id="window-info">Window: 00:00 - 05:00</span>
+                <button class="window-btn" id="next-window-btn">Next 5 Mins ➡</button>
+            </div>
+            
+            <div id="waveform"></div>
+            <div id="wave-timeline"></div>
+
+            <div class="controls">
+                <button class="play-btn" id="play-btn">▶</button>
+                <div class="time-info" id="time-display">00:00 / 00:00</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden audio element for true full-file playback -->
+    <audio id="main-audio"></audio>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const waveformWrapper = document.getElementById('waveform-wrapper');
+        const playBtn = document.getElementById('play-btn');
+        const timeDisplay = document.getElementById('time-display');
+        const prevBtn = document.getElementById('prev-window-btn');
+        const nextBtn = document.getElementById('next-window-btn');
+        const windowInfo = document.getElementById('window-info');
+        const mainAudio = document.getElementById('main-audio');
+        const waveformDiv = document.getElementById('waveform');
+
+        let wavesurfer = null;
+        let currentFile = null;
+        let fileDuration = 0;
+        let bytesPerSec = 0;
+        
+        // Window config
+        const WINDOW_MINUTES = 5;
+        const WINDOW_SECONDS = WINDOW_MINUTES * 60;
+        let windowStartSec = 0;
+        let isWindowLoading = false;
+
+        function formatTime(seconds) {
+            if (isNaN(seconds)) return '00:00';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            if (h > 0) return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function initWavesurfer() {
+            if (wavesurfer) wavesurfer.destroy();
+            wavesurfer = WaveSurfer.create({
+                container: '#waveform',
+                waveColor: 'rgba(255, 255, 255, 0.2)',
+                progressColor: '#00ff88',
+                cursorColor: '#fff',
+                cursorWidth: 2,
+                barWidth: 2,
+                barGap: 2,
+                barRadius: 2,
+                height: 120,
+                normalize: true,
+                interact: true, // Allow clicking to seek
+                plugins: [
+                    WaveSurfer.Timeline.create({ container: '#wave-timeline', height: 20, timeInterval: 30, primaryLabelInterval: 2, style: { fontSize: '10px', color: '#8892b0' } }),
+                    WaveSurfer.Hover.create({ lineColor: 'rgba(255,255,255,0.5)', lineWidth: 2, labelBackground: '#000', labelColor: '#fff', labelSize: '12px' })
+                ]
+            });
+
+            // When user clicks the waveform, seek the main audio!
+            wavesurfer.on('interaction', (newTime) => {
+                // newTime is the time within the 5-min chunk
+                mainAudio.currentTime = windowStartSec + newTime;
+            });
+        }
+
+        // Load the 5-minute slice visually
+        async function loadWindow(startSec) {
+            if (!currentFile || !bytesPerSec || isWindowLoading) return;
+            isWindowLoading = true;
+            
+            // Ensure bounds
+            if (startSec < 0) startSec = 0;
+            if (startSec >= fileDuration) startSec = Math.max(0, fileDuration - WINDOW_SECONDS);
+            windowStartSec = startSec;
+
+            let endSec = startSec + WINDOW_SECONDS;
+            if (endSec > fileDuration) endSec = fileDuration;
+
+            // Calculate byte offsets using average bitrate
+            const startByte = Math.floor(startSec * bytesPerSec);
+            const endByte = Math.floor(endSec * bytesPerSec);
+
+            // UI Updates
+            waveformDiv.classList.add('loading');
+            windowInfo.textContent = `Window: ${formatTime(startSec)} - ${formatTime(endSec)}`;
+            prevBtn.disabled = startSec <= 0;
+            nextBtn.disabled = endSec >= fileDuration;
+
+            // Slice the massive file! (Zero memory overhead)
+            const sliceBlob = currentFile.slice(startByte, endByte, currentFile.type || 'audio/mp3');
+            const sliceUrl = URL.createObjectURL(sliceBlob);
+
+            // Load the slice into wavesurfer
+            await wavesurfer.load(sliceUrl);
+            waveformDiv.classList.remove('loading');
+            isWindowLoading = false;
+            
+            // Sync cursor immediately if playing in this window
+            syncCursor();
+        }
+
+        // Sync main audio playback with UI
+        function syncCursor() {
+            const cur = mainAudio.currentTime;
+            timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(fileDuration)}`;
+            
+            if (isWindowLoading) return;
+
+            // Auto-advance window if playback crosses the bounds
+            if (cur < windowStartSec || cur > windowStartSec + WINDOW_SECONDS) {
+                loadWindow(cur);
+                return;
+            }
+
+            // Update wavesurfer cursor
+            const relativeTime = cur - windowStartSec;
+            const duration = wavesurfer.getDuration() || WINDOW_SECONDS;
+            wavesurfer.seekTo(relativeTime / duration);
+        }
+
+        mainAudio.addEventListener('timeupdate', syncCursor);
+        mainAudio.addEventListener('play', () => playBtn.textContent = '⏸');
+        mainAudio.addEventListener('pause', () => playBtn.textContent = '▶');
+        mainAudio.addEventListener('ended', () => playBtn.textContent = '▶');
+
+        // Play button toggles main audio
+        playBtn.addEventListener('click', () => {
+            if (mainAudio.paused) mainAudio.play();
+            else mainAudio.pause();
+        });
+
+        // Window navigation
+        prevBtn.addEventListener('click', () => loadWindow(windowStartSec - WINDOW_SECONDS));
+        nextBtn.addEventListener('click', () => loadWindow(windowStartSec + WINDOW_SECONDS));
+
+        // Handle File Drop
+        function handleFile(file) {
+            currentFile = file;
+            dropZone.style.display = 'none';
+            waveformWrapper.style.display = 'flex';
+
+            initWavesurfer();
+
+            // Load full file into main audio for real playback & metadata
+            const fullUrl = URL.createObjectURL(file);
+            mainAudio.src = fullUrl;
+            
+            mainAudio.onloadedmetadata = () => {
+                fileDuration = mainAudio.duration;
+                bytesPerSec = file.size / fileDuration;
+                
+                // Load the first 5 minutes visually
+                loadWindow(0);
+            };
+        }
+
+        // Drag & Drop bindings
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', e => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', e => {
+            e.preventDefault(); dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', e => {
+            if (e.target.files.length) handleFile(e.target.files[0]);
+        });
+    </script>
+</body>
+</html>

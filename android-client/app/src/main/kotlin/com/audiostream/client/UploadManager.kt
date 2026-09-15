@@ -299,6 +299,7 @@ class UploadManager(
                 .addFormDataPart("chunk_id", chunk.uuid)
                 .addFormDataPart("duration_ms", (chunk.duration * 1000).toInt().toString())
                 .addFormDataPart("checksum", chunk.checksum)
+                .addFormDataPart("timestamp", chunk.timestamp)
                 .addFormDataPart("in_call", if (chunk.inCall) "1" else "0")
                 .addFormDataPart("mic_in_use", if (chunk.micInUse) "1" else "0")
                 .build()

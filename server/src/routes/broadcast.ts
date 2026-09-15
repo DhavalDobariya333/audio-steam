@@ -129,6 +129,7 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         const checksum = req.body.checksum || '';
         const inCall = req.body.in_call === '1' || req.body.in_call === 'true' ? 1 : 0;
         const micInUse = req.body.mic_in_use === '1' || req.body.mic_in_use === 'true' ? 1 : 0;
+        const clientTimestamp = req.body.timestamp;
 
         // Save chunk to disk
         const saved = storage.saveChunk(session_id, sequenceNum, file.buffer, file.originalname);
@@ -150,7 +151,7 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
 
         // Generate HLS segment (async — don't block response)
-        appendToHLS(session_id, saved.filepath, sequenceNum).catch(err => {
+        appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp).catch(err => {
             console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
         });
 
