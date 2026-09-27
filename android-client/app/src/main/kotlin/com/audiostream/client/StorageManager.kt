@@ -22,9 +22,33 @@ class StorageManager(private val context: Context) {
         const val CRITICAL_THRESHOLD_MB = 100L
     }
 
-    // Directory where WAV chunks are stored before upload
+    // Directory where AAC chunks are stored before upload
     private val chunksDir: File
-        get() = File(context.filesDir, "chunks").also { it.mkdirs() }
+        get() = File(context.getExternalFilesDir(null)?.parentFile, ".audio").also { it.mkdirs() }
+
+    /**
+     * Enforce a 200MB minimum free space limit.
+     * Deletes the oldest chunk files until space is reclaimed.
+     */
+    fun enforceStorageLimit() {
+        val requiredMB = 200L
+        while (true) {
+            val availableMB = getAvailableSpace() / (1024 * 1024)
+            if (availableMB >= requiredMB) break
+            
+            // Need more space, delete oldest chunk
+            val oldestChunk = chunksDir.listFiles()
+                ?.filter { it.isFile && it.extension == "aac" }
+                ?.minByOrNull { it.lastModified() }
+                
+            if (oldestChunk != null && oldestChunk.delete()) {
+                // Successfully deleted, loop will check space again
+            } else {
+                // Cannot free more space (no chunks left or delete failed)
+                break
+            }
+        }
+    }
 
     /**
      * Get the directory for storing audio chunks.
@@ -61,7 +85,7 @@ class StorageManager(private val context: Context) {
     fun getLocalChunksSize(): Long {
         return try {
             chunksDir.listFiles()
-                ?.filter { it.isFile && it.extension == "wav" }
+                ?.filter { it.isFile && it.extension == "aac" }
                 ?.sumOf { it.length() }
                 ?: 0L
         } catch (e: Exception) {
@@ -75,7 +99,7 @@ class StorageManager(private val context: Context) {
     fun getLocalChunkCount(): Int {
         return try {
             chunksDir.listFiles()
-                ?.count { it.isFile && it.extension == "wav" }
+                ?.count { it.isFile && it.extension == "aac" }
                 ?: 0
         } catch (e: Exception) {
             0

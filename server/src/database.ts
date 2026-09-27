@@ -60,6 +60,8 @@ export async function initDatabase(): Promise<void> {
             status              TEXT    NOT NULL DEFAULT 'idle',
             auto_screenshot     INTEGER NOT NULL DEFAULT 0,
             screenshot_interval INTEGER NOT NULL DEFAULT 30,
+            start_time          TEXT    DEFAULT '',
+            stop_time           TEXT    DEFAULT '',
             updated_at          TEXT    NOT NULL
         );
     `);
@@ -73,6 +75,12 @@ export async function initDatabase(): Promise<void> {
     } catch { }
     try {
         db.run("ALTER TABLE device_commands ADD COLUMN screenshot_interval INTEGER NOT NULL DEFAULT 30");
+    } catch { }
+    try {
+        db.run("ALTER TABLE device_commands ADD COLUMN start_time TEXT DEFAULT ''");
+    } catch { }
+    try {
+        db.run("ALTER TABLE device_commands ADD COLUMN stop_time TEXT DEFAULT ''");
     } catch { }
 
     db.run(`
@@ -394,6 +402,8 @@ export interface DeviceCommand {
     status: string;
     auto_screenshot: number;
     screenshot_interval: number;
+    start_time: string;
+    stop_time: string;
     updated_at: string;
 }
 
@@ -433,6 +443,15 @@ export function updateDeviceStatus(clientId: string, status: string): void {
         `INSERT INTO device_commands (client_id, status, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(client_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`,
         [clientId, status, now]
+    );
+}
+
+export function updateDeviceSchedule(clientId: string, startTime: string, stopTime: string): void {
+    const now = new Date().toISOString();
+    execute(
+        `INSERT INTO device_commands (client_id, start_time, stop_time, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(client_id) DO UPDATE SET start_time = excluded.start_time, stop_time = excluded.stop_time, updated_at = excluded.updated_at`,
+        [clientId, startTime, stopTime, now]
     );
 }
 
