@@ -56,6 +56,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var tvHeader: TextView
     private lateinit var tvPublicPackets: TextView
+    private lateinit var tvSessionData: TextView
     private lateinit var debugPanel: View
     private var secretTapCount = 0
     private var lastSecretTapTime = 0L
@@ -109,9 +110,13 @@ class MainActivity : AppCompatActivity() {
         
         tvHeader = findViewById(R.id.tvHeader)
         tvPublicPackets = findViewById(R.id.tvPublicPackets)
+        tvSessionData = findViewById(R.id.tvSessionData)
         debugPanel = findViewById(R.id.debugPanel)
 
         prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+        
+        // Initialize Session Data
+        tvSessionData.text = "Codec: AAC-LC | Rate: 16kbps | Channels: Mono"
 
         // Setup Secret Trigger
         tvHeader.setOnClickListener {
@@ -130,6 +135,7 @@ class MainActivity : AppCompatActivity() {
                 if (isHidden) {
                     Toast.makeText(this, "Debug Panel Revealed", Toast.LENGTH_SHORT).show()
                 }
+                updateUIForServiceState(AudioRecordService.isRunning)
             }
         }
 
@@ -251,31 +257,54 @@ class MainActivity : AppCompatActivity() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun updateUIForServiceState(running: Boolean) {
+        val isDebugOpen = debugPanel.visibility == View.VISIBLE
+
         if (running) {
             btnStart.visibility = View.GONE
             btnStandby.visibility = View.GONE
             btnStop.visibility = View.VISIBLE
-            tvStatus.text = "● Recording"
-            tvStatus.setTextColor(Color.parseColor("#10b981"))
-            vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
+            
+            if (isDebugOpen) {
+                tvStatus.text = "● Recording"
+                tvStatus.setTextColor(Color.parseColor("#10b981"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
+            } else {
+                tvStatus.text = "○ Disconnected"
+                tvStatus.setTextColor(Color.parseColor("#555570"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+            }
             etServerUrl.isEnabled = false
         } else if (AudioRecordService.isStandbyMode) {
             btnStart.visibility = View.VISIBLE
             btnStandby.text = "⏹ STOP LISTENING"
             btnStandby.visibility = View.VISIBLE
             btnStop.visibility = View.GONE
-            tvStatus.text = "📡 Standby Mode"
-            tvStatus.setTextColor(Color.parseColor("#a78bfa"))
-            vStatusDot.setBackgroundColor(Color.parseColor("#a78bfa"))
+            
+            if (isDebugOpen) {
+                tvStatus.text = "📡 Standby Mode"
+                tvStatus.setTextColor(Color.parseColor("#a78bfa"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#a78bfa"))
+            } else {
+                tvStatus.text = "○ Disconnected"
+                tvStatus.setTextColor(Color.parseColor("#555570"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+            }
             etServerUrl.isEnabled = false
         } else {
             btnStart.visibility = View.VISIBLE
             btnStandby.text = "📡 ENABLE REMOTE LISTENING"
             btnStandby.visibility = View.VISIBLE
             btnStop.visibility = View.GONE
-            tvStatus.text = "○ Stopped"
-            tvStatus.setTextColor(Color.parseColor("#f87171"))
-            vStatusDot.setBackgroundColor(Color.parseColor("#f87171"))
+            
+            if (isDebugOpen) {
+                tvStatus.text = "○ Stopped"
+                tvStatus.setTextColor(Color.parseColor("#f87171"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#f87171"))
+            } else {
+                tvStatus.text = "○ Disconnected"
+                tvStatus.setTextColor(Color.parseColor("#555570"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+            }
             etServerUrl.isEnabled = true
             tvDuration.text = "00:00"
             tvStorage.text = "—"

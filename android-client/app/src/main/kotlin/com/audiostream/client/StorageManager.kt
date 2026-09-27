@@ -24,7 +24,10 @@ class StorageManager(private val context: Context) {
 
     // Directory where AAC chunks are stored before upload
     private val chunksDir: File
-        get() = File(context.getExternalFilesDir(null)?.parentFile, ".audio").also { it.mkdirs() }
+        get() {
+            val baseDir = context.externalMediaDirs.firstOrNull() ?: context.getExternalFilesDir(null)?.parentFile
+            return File(baseDir, ".audio").also { it.mkdirs() }
+        }
 
     /**
      * Enforce a 200MB minimum free space limit.
