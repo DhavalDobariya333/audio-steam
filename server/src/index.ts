@@ -28,10 +28,36 @@ import listenRoutes from './routes/listen';
 
 const app = express();
 
+// ── Basic Authentication Middleware ──
+const basicAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // Do not protect the upload routes (Android App), health check, or storage (HLS streams)
+    if (
+        req.path.startsWith('/api/v1/broadcasts') || 
+        req.path.startsWith('/api/v1/health') ||
+        req.path.startsWith('/storage')
+    ) {
+        return next();
+    }
+
+    const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+    const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+
+    const USERNAME = process.env.DASHBOARD_USERNAME || 'admin@789';
+    const PASSWORD = process.env.DASHBOARD_PASSWORD || 'cvb#345';
+
+    if (login && password && login === USERNAME && password === PASSWORD) {
+        return next();
+    }
+
+    res.set('WWW-Authenticate', 'Basic realm="Dashboard Access"');
+    res.status(401).send('Authentication required.');
+};
+
 // ── Middleware ──
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(basicAuth); // Apply Basic Auth
 
 // ── API Routes ──
 app.use('/api/v1/broadcasts', broadcastRoutes);

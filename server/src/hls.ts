@@ -14,8 +14,10 @@
  * Requires FFmpeg in system PATH.
  */
 
-import { execSync, spawn } from 'child_process';
+import { exec, spawn } from 'child_process';
+import util from 'util';
 import fs from 'fs';
+import fsPromises from 'fs/promises';
 import path from 'path';
 import { getHlsDir } from './storage';
 import { HLS_SEGMENT_DURATION, HLS_LIST_SIZE } from './config';
@@ -24,6 +26,7 @@ import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
 const FFMPEG_PATH = ffmpegInstaller.path;
 const FFPROBE_PATH = ffprobeInstaller.path;
+const execAsync = util.promisify(exec);
 
 // ════════════════════════════════════════════════════════════════════════════
 // FFMPEG AVAILABILITY CHECK
@@ -33,7 +36,7 @@ let ffmpegAvailable = false;
 
 export function checkFfmpeg(): boolean {
     try {
-        execSync(`"${FFMPEG_PATH}" -version`, { stdio: 'ignore' });
+        exec(`"${FFMPEG_PATH}" -version`);
         ffmpegAvailable = true;
         console.log('[hls] FFmpeg found via static binary');
         return true;
@@ -45,17 +48,44 @@ export function checkFfmpeg(): boolean {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// HLS GENERATION QUEUE (Prevents fork-bombs and race conditions)
+// ════════════════════════════════════════════════════════════════════════════
+
+type Task = () => Promise<void>;
+const hlsQueues = new Map<string, Task[]>();
+const isProcessing = new Set<string>();
+
+function enqueueHlsTask(sessionId: string, task: Task) {
+    if (!hlsQueues.has(sessionId)) {
+        hlsQueues.set(sessionId, []);
+    }
+    hlsQueues.get(sessionId)!.push(task);
+    processNextHlsTask(sessionId);
+}
+
+async function processNextHlsTask(sessionId: string) {
+    if (isProcessing.has(sessionId)) return;
+    
+    const queue = hlsQueues.get(sessionId)!;
+    if (queue.length === 0) return;
+    
+    isProcessing.add(sessionId);
+    const task = queue.shift()!;
+    
+    try {
+        await task();
+    } catch (err) {
+        console.error(`[hls] Task error for session ${sessionId}:`, err);
+    }
+    
+    isProcessing.delete(sessionId);
+    processNextHlsTask(sessionId); // Run next in queue
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // HLS SEGMENT GENERATION
 // ════════════════════════════════════════════════════════════════════════════
 
-/**
- * Convert a raw audio chunk to an AAC .ts segment and update playlists.
- *
- * @param sessionId   - The broadcast session ID
- * @param chunkPath   - Absolute path to the raw audio chunk (WAV)
- * @param sequenceNum - Chunk sequence number (used for segment naming)
- * @returns Promise<boolean> - true if HLS generation succeeded
- */
 export async function appendToHLS(
     sessionId: string,
     chunkPath: string,
@@ -64,6 +94,21 @@ export async function appendToHLS(
 ): Promise<boolean> {
     if (!ffmpegAvailable) return false;
 
+    // Enqueue the heavy work to prevent race conditions and limit concurrency
+    return new Promise((resolve) => {
+        enqueueHlsTask(sessionId, async () => {
+            const success = await _processHlsChunk(sessionId, chunkPath, sequenceNum, clientTimestamp);
+            resolve(success);
+        });
+    });
+}
+
+async function _processHlsChunk(
+    sessionId: string,
+    chunkPath: string,
+    sequenceNum: number,
+    clientTimestamp?: string
+): Promise<boolean> {
     const hlsDir = getHlsDir(sessionId);
     fs.mkdirSync(hlsDir, { recursive: true });
 
@@ -74,39 +119,37 @@ export async function appendToHLS(
     // ── Step 1: Transcode raw chunk → AAC .ts segment ──
     try {
         await runFfmpeg([
-            '-y',                       // Overwrite output
-            '-i', chunkPath,            // Input: AAC ADTS chunk
-            '-c:a', 'copy',             // Copy existing AAC stream (no transcoding!)
-            '-f', 'mpegts',             // MPEG-TS container
-            segmentPath,                // Output
+            '-y',
+            '-i', chunkPath,
+            '-c:a', 'copy',
+            '-f', 'mpegts',
+            segmentPath,
         ]);
     } catch (err) {
         console.error(`[hls] FFmpeg encode failed for seq ${sequenceNum}:`, err);
         return false;
     }
 
-    // Verify segment was created
     if (!fs.existsSync(segmentPath)) {
-        console.error(`[hls] Segment file not created: ${segmentPath}`);
         return false;
     }
 
-    // ── Step 2: Get segment duration ──
+    // ── Step 2: Get segment duration (Async) ──
     let segDuration = HLS_SEGMENT_DURATION;
     try {
-        const probe = execSync(
+        const { stdout } = await execAsync(
             `"${FFPROBE_PATH}" -v quiet -show_entries format=duration -of csv=p=0 "${segmentPath}"`,
             { encoding: 'utf-8' }
-        ).trim();
-        const parsed = parseFloat(probe);
+        );
+        const parsed = parseFloat(stdout.trim());
         if (!isNaN(parsed) && parsed > 0) segDuration = parsed;
     } catch {
-        // Use default duration
+        // Default to HLS_SEGMENT_DURATION on error
     }
 
     // ── Step 3: Update playlists ──
-    updateLivePlaylist(hlsDir, segmentFilename, segDuration, sequenceNum);
-    updateVodPlaylist(hlsDir, segmentFilename, segDuration);
+    await updateLivePlaylist(hlsDir, segmentFilename, segDuration, sequenceNum);
+    await updateVodPlaylist(hlsDir, segmentFilename, segDuration);
 
     return true;
 }
@@ -115,31 +158,25 @@ export async function appendToHLS(
 // PLAYLIST MANAGEMENT
 // ════════════════════════════════════════════════════════════════════════════
 
-/**
- * Update the live.m3u8 playlist (sliding window for live listeners).
- */
-function updateLivePlaylist(
+async function updateLivePlaylist(
     hlsDir: string,
     segmentFilename: string,
     duration: number,
     sequenceNum: number
-): void {
+): Promise<void> {
     const playlistPath = path.join(hlsDir, 'live.m3u8');
-
-    // Read existing segments from playlist
     const segments: { filename: string; duration: number }[] = [];
     let mediaSequence = 0;
 
-    if (fs.existsSync(playlistPath)) {
-        const content = fs.readFileSync(playlistPath, 'utf-8');
+    try {
+        const content = await fsPromises.readFile(playlistPath, 'utf-8');
         const lines = content.split('\n');
-
+        
         for (const line of lines) {
             const seqMatch = line.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/);
             if (seqMatch) mediaSequence = parseInt(seqMatch[1], 10);
         }
 
-        // Parse existing segments
         for (let i = 0; i < lines.length; i++) {
             const extInfMatch = lines[i].match(/^#EXTINF:([\d.]+)/);
             if (extInfMatch && i + 1 < lines.length && !lines[i + 1].startsWith('#')) {
@@ -149,21 +186,19 @@ function updateLivePlaylist(
                 });
             }
         }
+    } catch (e) {
+        // File doesn't exist yet, which is fine
     }
 
-    // Add new segment
     segments.push({ filename: segmentFilename, duration });
 
-    // Keep only last N segments (sliding window)
     while (segments.length > HLS_LIST_SIZE) {
         segments.shift();
         mediaSequence++;
     }
 
-    // Find max duration for target duration
     const targetDuration = Math.ceil(Math.max(...segments.map(s => s.duration), HLS_SEGMENT_DURATION));
 
-    // Write playlist
     let m3u8 = '#EXTM3U\n';
     m3u8 += '#EXT-X-VERSION:3\n';
     m3u8 += `#EXT-X-TARGETDURATION:${targetDuration}\n`;
@@ -175,24 +210,19 @@ function updateLivePlaylist(
         m3u8 += `${seg.filename}\n`;
     }
 
-    fs.writeFileSync(playlistPath, m3u8);
+    await fsPromises.writeFile(playlistPath, m3u8);
 }
 
-/**
- * Update the vod.m3u8 playlist (complete list for DVR / replay).
- */
-function updateVodPlaylist(
+async function updateVodPlaylist(
     hlsDir: string,
     segmentFilename: string,
     duration: number
-): void {
+): Promise<void> {
     const playlistPath = path.join(hlsDir, 'vod.m3u8');
-
-    // Read existing segments
     const segments: { filename: string; duration: number }[] = [];
 
-    if (fs.existsSync(playlistPath)) {
-        const content = fs.readFileSync(playlistPath, 'utf-8');
+    try {
+        const content = await fsPromises.readFile(playlistPath, 'utf-8');
         const lines = content.split('\n');
 
         for (let i = 0; i < lines.length; i++) {
@@ -204,16 +234,16 @@ function updateVodPlaylist(
                 });
             }
         }
+    } catch (e) {
+        // File doesn't exist yet
     }
 
-    // Add new segment (no duplicates)
     if (!segments.some(s => s.filename === segmentFilename)) {
         segments.push({ filename: segmentFilename, duration });
     }
 
     const targetDuration = Math.ceil(Math.max(...segments.map(s => s.duration), HLS_SEGMENT_DURATION));
 
-    // Write playlist — NOTE: no #EXT-X-ENDLIST while live
     let m3u8 = '#EXTM3U\n';
     m3u8 += '#EXT-X-VERSION:3\n';
     m3u8 += `#EXT-X-TARGETDURATION:${targetDuration}\n`;
@@ -226,32 +256,26 @@ function updateVodPlaylist(
         m3u8 += `${seg.filename}\n`;
     }
 
-    fs.writeFileSync(playlistPath, m3u8);
+    await fsPromises.writeFile(playlistPath, m3u8);
 }
 
-/**
- * Finalize the VOD playlist by appending #EXT-X-ENDLIST.
- * Called when a broadcast session ends.
- */
 export function finalizeHLS(sessionId: string): void {
-    const hlsDir = getHlsDir(sessionId);
-    const vodPath = path.join(hlsDir, 'vod.m3u8');
+    // We should enqueue this as well to prevent race conditions during finalize
+    enqueueHlsTask(sessionId, async () => {
+        const hlsDir = getHlsDir(sessionId);
+        const vodPath = path.join(hlsDir, 'vod.m3u8');
 
-    if (!fs.existsSync(vodPath)) return;
+        if (!fs.existsSync(vodPath)) return;
 
-    let content = fs.readFileSync(vodPath, 'utf-8');
-    if (!content.includes('#EXT-X-ENDLIST')) {
-        // Change playlist type from EVENT to VOD
-        content = content.replace('#EXT-X-PLAYLIST-TYPE:EVENT', '#EXT-X-PLAYLIST-TYPE:VOD');
-        content += '#EXT-X-ENDLIST\n';
-        fs.writeFileSync(vodPath, content);
-        console.log(`[hls] Finalized VOD playlist for session ${sessionId}`);
-    }
+        let content = await fsPromises.readFile(vodPath, 'utf-8');
+        if (!content.includes('#EXT-X-ENDLIST')) {
+            content = content.replace('#EXT-X-PLAYLIST-TYPE:EVENT', '#EXT-X-PLAYLIST-TYPE:VOD');
+            content += '#EXT-X-ENDLIST\n';
+            await fsPromises.writeFile(vodPath, content);
+            console.log(`[hls] Finalized VOD playlist for session ${sessionId}`);
+        }
+    });
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-// FFMPEG PROCESS WRAPPER
-// ════════════════════════════════════════════════════════════════════════════
 
 function runFfmpeg(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
