@@ -36,6 +36,7 @@ const ui = {
     playerStateBadge: document.getElementById('player-state-badge'),
     telemetryCallBadge: document.getElementById('telemetry-call-badge'),
     telemetryMicBadge: document.getElementById('telemetry-mic-badge'),
+    telemetryBatteryBadge: document.getElementById('telemetry-battery-badge'),
     latencyBadge: document.getElementById('latency-badge'),
     
     // Channel Panner
@@ -71,6 +72,9 @@ const ui = {
     btnRemoteStart: document.getElementById('btn-remote-start'),
     btnRemoteStop: document.getElementById('btn-remote-stop'),
     remoteClientSelect: document.getElementById('remote-client-select'),
+    remoteStartTime: document.getElementById('remote-start-time'),
+    remoteStopTime: document.getElementById('remote-stop-time'),
+    btnRemoteSchedule: document.getElementById('btn-remote-schedule'),
     
     // View tabs & layout columns
     tabAll: document.getElementById('tab-all'),
@@ -134,6 +138,7 @@ function bindEvents() {
     
     if (ui.btnRemoteStart) ui.btnRemoteStart.addEventListener('click', () => sendRemoteCommand('START'));
     if (ui.btnRemoteStop) ui.btnRemoteStop.addEventListener('click', () => sendRemoteCommand('STOP'));
+    if (ui.btnRemoteSchedule) ui.btnRemoteSchedule.addEventListener('click', sendRemoteSchedule);
     
     // Secret Trigger Logic
     if (ui.secretTriggerHeader) {
@@ -381,6 +386,19 @@ function setupHls(url) {
         
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
             ui.overlay.classList.add('hidden');
+        });
+
+        hls.on(Hls.Events.FRAG_CHANGED, (event, data) => {
+            if (data && data.frag && data.frag.relurl) {
+                // filename format: seg_000035_2026-09-28T19-58-18_B85_S1024.ts
+                const match = data.frag.relurl.match(/_B(\d+)_S/);
+                if (match && ui.telemetryBatteryBadge) {
+                    const battery = match[1];
+                    ui.telemetryBatteryBadge.textContent = `🔋 Battery: ${battery}%`;
+                    ui.telemetryBatteryBadge.style.color = battery < 20 ? '#f87171' : '#10b981';
+                    ui.telemetryBatteryBadge.style.borderColor = battery < 20 ? '#f87171' : 'rgba(255,255,255,0.1)';
+                }
+            }
         });
     } else if (ui.audio.canPlayType('application/vnd.apple.mpegurl')) {
         ui.audio.src = url;
@@ -799,6 +817,34 @@ async function sendRemoteCommand(command) {
     } catch (e) {
         console.error('Remote command error:', e);
         alert('Failed to send remote command');
+    }
+}
+
+async function sendRemoteSchedule() {
+    const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : null;
+    if (!clientId) {
+        alert('Please select a device from the remote control dropdown first');
+        return;
+    }
+
+    const startTime = ui.remoteStartTime ? ui.remoteStartTime.value : '';
+    const stopTime = ui.remoteStopTime ? ui.remoteStopTime.value : '';
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/schedule', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId, start_time: startTime, stop_time: stopTime })
+        });
+        if (res.ok) {
+            alert(`Schedule set for ${clientId} (Start: ${startTime || 'None'}, Stop: ${stopTime || 'None'})`);
+        } else {
+            const err = await res.json();
+            alert(`Error: ${err.message}`);
+        }
+    } catch (e) {
+        console.error('Schedule error:', e);
+        alert('Failed to set schedule');
     }
 }
 

@@ -148,6 +148,7 @@
                         <span class="status-badge" id="player-state-badge">State: Idle</span>
                         <span class="status-badge" id="telemetry-call-badge">📞 Call: Idle</span>
                         <span class="status-badge" id="telemetry-mic-badge">🎙️ Mic: Clear</span>
+                        <span class="status-badge" id="telemetry-battery-badge">🔋 Battery: --%</span>
                         <span class="status-badge" id="latency-badge">Latency: --s</span>
                     </div>
 
@@ -177,6 +178,17 @@
                             <button class="btn btn--remote-stop" id="btn-remote-stop">
                                 <span>⏹️</span> Remote Stop Recording
                             </button>
+                        </div>
+                        <div class="schedule-box" style="margin-top: 15px; display: flex; gap: 10px; align-items: flex-end;">
+                            <div style="flex: 1;">
+                                <label for="remote-start-time" class="field-label">AUTO-START TIME (HH:MM)</label>
+                                <input type="time" id="remote-start-time" class="select-field" style="width: 100%;">
+                            </div>
+                            <div style="flex: 1;">
+                                <label for="remote-stop-time" class="field-label">AUTO-STOP TIME (HH:MM)</label>
+                                <input type="time" id="remote-stop-time" class="select-field" style="width: 100%;">
+                            </div>
+                            <button class="btn btn--secondary" id="btn-remote-schedule" style="padding: 12px 15px;">Set Schedule</button>
                         </div>
                     </div>
                 </section>

@@ -33,6 +33,7 @@ const basicAuth = (req: express.Request, res: express.Response, next: express.Ne
     // Do not protect the upload routes (Android App), health check, or storage (HLS streams)
     if (
         req.path.startsWith('/api/v1/broadcasts') || 
+        req.path === '/api/v1/listen/active' ||
         req.path.startsWith('/api/v1/health') ||
         req.path.startsWith('/storage')
     ) {

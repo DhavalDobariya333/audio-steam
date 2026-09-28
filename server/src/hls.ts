@@ -210,7 +210,10 @@ async function updateLivePlaylist(
         m3u8 += `${seg.filename}\n`;
     }
 
-    await fsPromises.writeFile(playlistPath, m3u8);
+    // Atomic write to prevent client from reading an incomplete file
+    const tmpPath = `${playlistPath}.tmp`;
+    await fsPromises.writeFile(tmpPath, m3u8);
+    await fsPromises.rename(tmpPath, playlistPath);
 }
 
 async function updateVodPlaylist(
@@ -256,7 +259,10 @@ async function updateVodPlaylist(
         m3u8 += `${seg.filename}\n`;
     }
 
-    await fsPromises.writeFile(playlistPath, m3u8);
+    // Atomic write
+    const tmpPath = `${playlistPath}.tmp`;
+    await fsPromises.writeFile(tmpPath, m3u8);
+    await fsPromises.rename(tmpPath, playlistPath);
 }
 
 export function finalizeHLS(sessionId: string): void {
