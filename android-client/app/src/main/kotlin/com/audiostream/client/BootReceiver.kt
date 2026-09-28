@@ -34,10 +34,10 @@ class BootReceiver : BroadcastReceiver() {
             // Check if we have a saved server URL
             val serverUrl = prefs.getString("server_url", null) ?: return
 
-            // Start the AudioRecordService in Standby Mode
+            // Start the AudioRecordService in active Recording Mode
             try {
                 val serviceIntent = Intent(context, AudioRecordService::class.java).apply {
-                    this.action = AudioRecordService.ACTION_STANDBY
+                    this.action = AudioRecordService.ACTION_START
                     putExtra(AudioRecordService.EXTRA_SERVER_URL, serverUrl)
                 }
                 ContextCompat.startForegroundService(context, serviceIntent)

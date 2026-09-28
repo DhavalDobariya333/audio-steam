@@ -137,22 +137,18 @@ class UploadManager(
                     continue
                 }
 
-                // Check if server is reachable
-                if (!connectionMonitor.isServerReachable()) {
-                    onLog("Server not reachable, waiting...")
-                    delay(RETRY_INTERVAL_MS)
-                    // Try to reach server
-                    connectionMonitor.checkServer()
-                    continue
+                // Attempt upload if server is reachable
+                val success = if (!connectionMonitor.isServerReachable()) {
+                    onLog("Server not reachable, skipping upload attempt...")
+                    false // Treat as upload failure to trigger backoff
+                } else {
+                    uploadChunk(chunk)
                 }
-
-                // Attempt upload
-                val success = uploadChunk(chunk)
 
                 if (success) {
                     currentRetryCount.set(0)
                 } else {
-                    // Handle retry logic
+                    // Handle retry logic (will backoff to 60s if unreachable for long enough)
                     handleRetry()
                 }
 
@@ -294,7 +290,7 @@ class UploadManager(
                 .addFormDataPart(
                     "audio",
                     file.name,
-                    file.asRequestBody("audio/wav".toMediaType())
+                    file.asRequestBody("audio/aac".toMediaType())
                 )
                 .addFormDataPart("chunk_id", chunk.uuid)
                 .addFormDataPart("duration_ms", (chunk.duration * 1000).toInt().toString())

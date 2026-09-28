@@ -392,6 +392,8 @@ router.get('/command', (req: Request, res: Response) => {
         const commandStr = cmd ? cmd.command : 'NONE';
         const autoScreenshot = cmd ? cmd.auto_screenshot : 0;
         const screenshotInterval = cmd ? cmd.screenshot_interval : 30;
+        const startTime = cmd ? (cmd.start_time || "") : "";
+        const stopTime = cmd ? (cmd.stop_time || "") : "";
         
         // Don't clear START/STOP commands here — wait for the APK to acknowledge via /command/ack
         // Only clear transient one-shot commands that don't need reliability
@@ -405,7 +407,9 @@ router.get('/command', (req: Request, res: Response) => {
         res.json({ 
             command: commandStr,
             auto_screenshot: autoScreenshot,
-            screenshot_interval: screenshotInterval
+            screenshot_interval: screenshotInterval,
+            start_time: startTime,
+            stop_time: stopTime
         });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
@@ -443,6 +447,21 @@ router.post('/screenshot-settings', (req: Request, res: Response) => {
         }
         db.updateDeviceScreenshotSettings(client_id, auto_screenshot ? 1 : 0, interval || 30);
         res.json({ status: 'success' });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+router.post('/schedule', (req: Request, res: Response) => {
+    try {
+        const { client_id, start_time, stop_time } = req.body;
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+        db.updateDeviceSchedule(client_id, start_time || "", stop_time || "");
+        console.log(`[broadcast] Schedule set for ${client_id}: start=${start_time}, stop=${stop_time}`);
+        res.json({ status: 'success', client_id, start_time, stop_time });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }

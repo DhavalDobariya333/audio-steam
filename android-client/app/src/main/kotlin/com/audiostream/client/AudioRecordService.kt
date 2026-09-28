@@ -9,6 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
@@ -111,6 +114,10 @@ class AudioRecordService : Service() {
     private var totalRetries = 0
     private var connectionState = "Idle"
 
+    // Telemetry Cache
+    private var currentBatteryPct = -1
+    private var currentStorageMB = -1L
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -169,6 +176,7 @@ class AudioRecordService : Service() {
         val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
         val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
         val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()).toInt() else -1
+        currentBatteryPct = pct
         val icon = if (isCharging) "⚡" else "🔋"
         val stateStr = if (isCharging) "Charging" else "Discharging"
         val batteryStatus = if (pct >= 0) "$icon $pct% ($stateStr)" else "$icon Unknown"
@@ -240,11 +248,23 @@ class AudioRecordService : Service() {
         // 6. Start loops
         startNotificationUpdater()
         startCommandPolling()
+        startTelemetryPolling()
 
         broadcastStateUpdate()
     }
 
     private var isPolling = false
+    private var telemetryJob: Job? = null
+
+    private fun startTelemetryPolling() {
+        telemetryJob?.cancel()
+        telemetryJob = serviceScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                currentStorageMB = (storageManager?.getAvailableSpace() ?: 0L) / (1024 * 1024)
+                delay(60000L) // Poll every 60 seconds
+            }
+        }
+    }
 
     private fun startCommandPolling() {
         if (isPolling) return
@@ -269,6 +289,11 @@ class AudioRecordService : Service() {
                             if (body != null) {
                                 val json = JSONObject(body)
                                 val command = json.optString("command", "NONE")
+                                val startTime = json.optString("start_time", "")
+                                val stopTime = json.optString("stop_time", "")
+                                
+                                syncAlarm(startTime, ACTION_START, 101)
+                                syncAlarm(stopTime, ACTION_STANDBY, 102)
                                 
                                 var processed = false
                                 if (command == "START" && !isRunning) {
@@ -302,6 +327,50 @@ class AudioRecordService : Service() {
                 }
                 delay(15000L) // Poll every 15 seconds
             }
+        }
+    }
+
+    private fun syncAlarm(timeStr: String, actionToTrigger: String, requestCode: Int) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        val intent = Intent(this, AlarmReceiver::class.java).apply {
+            action = actionToTrigger
+            putExtra(AlarmReceiver.EXTRA_ACTION, actionToTrigger)
+            putExtra(AlarmReceiver.EXTRA_SERVER_URL, serverUrl)
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 
+            requestCode, 
+            intent, 
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        if (timeStr.isBlank()) {
+            alarmManager.cancel(pendingIntent)
+            return
+        }
+
+        try {
+            val parts = timeStr.split(":")
+            if (parts.size >= 2) {
+                val cal = Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, parts[0].toInt())
+                    set(Calendar.MINUTE, parts[1].toInt())
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }
+
+                if (cal.timeInMillis <= System.currentTimeMillis()) {
+                    cal.add(Calendar.DAY_OF_YEAR, 1) // next occurrence
+                }
+
+                alarmManager.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    cal.timeInMillis,
+                    pendingIntent
+                )
+            }
+        } catch (e: Exception) {
+            sendLog("Error syncing alarm: ${e.message}")
         }
     }
 
@@ -343,6 +412,8 @@ class AudioRecordService : Service() {
         // Cancel the notification updater since we're switching to standby stats loop
         notificationUpdaterJob?.cancel()
         notificationUpdaterJob = null
+        telemetryJob?.cancel()
+        telemetryJob = null
         
         uploadManager?.stop()
         connectionMonitor?.stop()
@@ -579,7 +650,7 @@ class AudioRecordService : Service() {
     }
 
     /**
-     * Save a PCM buffer as a complete WAV file and enqueue for upload.
+     * Compress PCM buffer to AAC (16 kbps) using hardware MediaCodec and save as .aac file.
      */
     private fun saveChunk(pcmData: ByteArray, dataSize: Int) {
         try {
@@ -594,30 +665,34 @@ class AudioRecordService : Service() {
                 recordingStartTimeMs = System.currentTimeMillis()
             }
 
-            // Create WAV file
-            val chunksDir = storageManager?.getChunksDirectory() ?: return
-            val wavFile = File(chunksDir, "chunk_${System.currentTimeMillis()}.wav")
+            // Phase 3: Enforce Storage Limit
+            storageManager?.enforceStorageLimit()
 
-            // Write WAV header + PCM data
-            FileOutputStream(wavFile).use { fos ->
-                fos.write(buildWavHeader(dataSize))
-                fos.write(pcmData, 0, dataSize)
-                fos.flush()
-                fos.fd.sync()  // Force write to disk
-            }
+            // Create AAC file
+            val chunksDir = storageManager?.getChunksDirectory() ?: return
+            
+            // Phase 4: Telemetry in Segment Names
+            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}"
+            val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}${telemetrySuffix}.aac")
+            
+            // Update timestamp to include telemetry for the server HLS generation
+            val timestampWithTelemetry = timestamp + telemetrySuffix
+
+            // Encode PCM to AAC
+            encodePcmToAac(pcmData, dataSize, aacFile)
 
             // Compute checksum
-            val checksum = computeSha256(wavFile)
+            val checksum = computeSha256(aacFile)
             val inCall = isPhoneInCall()
             val micInUse = isMicUsedByExternalApp()
 
             // Create chunk record
             val chunk = AudioChunk(
                 uuid = uuid,
-                filePath = wavFile.absolutePath,
-                timestamp = timestamp,
+                filePath = aacFile.absolutePath,
+                timestamp = timestampWithTelemetry,
                 duration = duration,
-                fileSize = wavFile.length(),
+                fileSize = aacFile.length(),
                 checksum = checksum,
                 inCall = inCall,
                 micInUse = micInUse
@@ -629,35 +704,90 @@ class AudioRecordService : Service() {
             }
 
         } catch (e: Exception) {
-            sendLog("ERROR saving chunk: ${e.message}")
+            sendLog("ERROR saving AAC chunk: ${e.message}")
         }
     }
 
-    /**
-     * Build a 44-byte WAV file header for PCM data.
-     */
-    private fun buildWavHeader(dataSize: Int): ByteArray {
-        val totalSize = dataSize + 36  // RIFF chunk size (file size - 8)
+    private fun encodePcmToAac(pcmData: ByteArray, dataSize: Int, outFile: File) {
+        val codec = MediaCodec.createEncoderByType("audio/mp4a-latm")
+        val format = MediaFormat.createAudioFormat("audio/mp4a-latm", SAMPLE_RATE, 1).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(MediaFormat.KEY_BIT_RATE, 16000) // 16 kbps Ultra-Low Bandwidth
+        }
+        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        codec.start()
 
-        return ByteBuffer.allocate(44).apply {
-            order(ByteOrder.LITTLE_ENDIAN)
-            // RIFF header
-            put("RIFF".toByteArray())
-            putInt(totalSize)
-            put("WAVE".toByteArray())
-            // fmt chunk
-            put("fmt ".toByteArray())
-            putInt(16)                  // Chunk size
-            putShort(1)                 // PCM format
-            putShort(1)                 // Mono
-            putInt(SAMPLE_RATE)         // Sample rate
-            putInt(BYTE_RATE)           // Byte rate
-            putShort(BYTES_PER_SAMPLE.toShort())  // Block align
-            putShort(16)                // Bits per sample
-            // data chunk
-            put("data".toByteArray())
-            putInt(dataSize)
-        }.array()
+        FileOutputStream(outFile).use { fos ->
+            var inputOffset = 0
+            var isEOS = false
+            val bufferInfo = MediaCodec.BufferInfo()
+
+            while (!isEOS || (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) == 0) {
+                if (!isEOS) {
+                    val inputBufferIndex = codec.dequeueInputBuffer(10000)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = codec.getInputBuffer(inputBufferIndex)!!
+                        val capacity = inputBuffer.capacity()
+                        val bytesToFeed = minOf(dataSize - inputOffset, capacity)
+
+                        if (bytesToFeed > 0) {
+                            inputBuffer.put(pcmData, inputOffset, bytesToFeed)
+                            inputOffset += bytesToFeed
+                            codec.queueInputBuffer(inputBufferIndex, 0, bytesToFeed, 0, 0)
+                        } else {
+                            codec.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            isEOS = true
+                        }
+                    }
+                }
+
+                var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                while (outputBufferIndex >= 0) {
+                    val outputBuffer = codec.getOutputBuffer(outputBufferIndex)!!
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        bufferInfo.size = 0
+                    }
+                    if (bufferInfo.size > 0) {
+                        outputBuffer.position(bufferInfo.offset)
+                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+
+                        // Add ADTS header for AAC chunk
+                        val packetLen = bufferInfo.size + 7
+                        val adtsHeader = ByteArray(7)
+                        addAdtsHeader(adtsHeader, packetLen)
+                        fos.write(adtsHeader)
+
+                        val data = ByteArray(bufferInfo.size)
+                        outputBuffer.get(data)
+                        fos.write(data)
+                    }
+                    codec.releaseOutputBuffer(outputBufferIndex, false)
+
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        break
+                    }
+                    outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                }
+            }
+            fos.flush()
+            fos.fd.sync()
+        }
+        codec.stop()
+        codec.release()
+    }
+
+    private fun addAdtsHeader(packet: ByteArray, packetLen: Int) {
+        val profile = 2 // AAC LC
+        val freqIdx = 8 // 16kHz (Sampling frequency index for 16000Hz is 8)
+        val chanCfg = 1 // Mono
+
+        packet[0] = 0xFF.toByte()
+        packet[1] = 0xF9.toByte()
+        packet[2] = (((profile - 1) shl 6) + (freqIdx shl 2) + (chanCfg shr 2)).toByte()
+        packet[3] = (((chanCfg and 3) shl 6) + (packetLen shr 11)).toByte()
+        packet[4] = ((packetLen and 0x7FF) shr 3).toByte()
+        packet[5] = (((packetLen and 7) shl 5) + 0x1F).toByte()
+        packet[6] = 0xFC.toByte()
     }
 
     /**

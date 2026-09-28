@@ -103,6 +103,31 @@
             android:textStyle="bold"/>
     </LinearLayout>
 
+    <!-- Session Data -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:padding="12dp"
+        android:background="#0d0d16"
+        android:layout_marginBottom="16dp">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Session Info: "
+            android:textColor="#555570"
+            android:textSize="14sp"/>
+        <TextView
+            android:id="@+id/tvSessionData"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Codec: AAC-LC | Rate: 16kbps"
+            android:textColor="#e4e4ec"
+            android:textSize="14sp"
+            android:textStyle="bold"/>
+    </LinearLayout>
+
     <!-- HIDDEN DEBUG PANEL -->
     <LinearLayout
         android:id="@+id/debugPanel"

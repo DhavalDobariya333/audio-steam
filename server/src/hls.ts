@@ -75,13 +75,10 @@ export async function appendToHLS(
     try {
         await runFfmpeg([
             '-y',                       // Overwrite output
-            '-i', chunkPath,            // Input: raw WAV chunk
-            '-c:a', 'aac',             // AAC codec
-            '-b:a', '64k',            // 64 kbps — good for speech
-            '-ar', '44100',            // Standard sample rate for AAC
-            '-ac', '1',                // Mono
-            '-f', 'mpegts',            // MPEG-TS container
-            segmentPath,               // Output
+            '-i', chunkPath,            // Input: AAC ADTS chunk
+            '-c:a', 'copy',             // Copy existing AAC stream (no transcoding!)
+            '-f', 'mpegts',             // MPEG-TS container
+            segmentPath,                // Output
         ]);
     } catch (err) {
         console.error(`[hls] FFmpeg encode failed for seq ${sequenceNum}:`, err);
