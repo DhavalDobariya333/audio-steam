@@ -131,37 +131,6 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         const micInUse = req.body.mic_in_use === '1' || req.body.mic_in_use === 'true' ? 1 : 0;
         const clientTimestamp = req.body.timestamp;
 
-        // --- Backlog Drop Logic ---
-        if (clientTimestamp) {
-            // Timestamp format: 2026-09-25T21-35-07
-            const dateStr = clientTimestamp.split('_')[0]; 
-            const dateRegex = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})$/;
-            const match = dateStr.match(dateRegex);
-            
-            if (match) {
-                const parseableDate = `${match[1]}:${match[2]}:${match[3]}`;
-                const chunkDate = new Date(parseableDate); 
-                
-                if (!isNaN(chunkDate.getTime())) {
-                    const ageMs = Date.now() - chunkDate.getTime();
-                    // If chunk is older than 24 hours, trick the phone into deleting it
-                    if (ageMs > 24 * 60 * 60 * 1000 || ageMs < -24 * 60 * 60 * 1000) {
-                        console.log(`[broadcast] Dropping old backlog chunk: ${clientTimestamp}`);
-                        res.json({
-                            status: 'confirmed',
-                            session_id,
-                            chunk_id: chunkId,
-                            sequence_num: sequenceNum,
-                            file_size: 0,
-                            message: 'Old chunk ignored to clear backlog.',
-                        });
-                        return;
-                    }
-                }
-            }
-        }
-        // --------------------------
-
         // Save chunk to disk
         const saved = storage.saveChunk(session_id, sequenceNum, file.buffer, file.originalname);
 
