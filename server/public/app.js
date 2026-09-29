@@ -96,6 +96,7 @@ const ui = {
     // Secret Trigger
     secretTriggerHeader: document.getElementById('secret-trigger-header'),
     secRemote: document.getElementById('sec-remote'),
+    scheduleBox: document.getElementById('schedule-box'),
 };
 
 let hls = null;
@@ -140,7 +141,7 @@ function bindEvents() {
     if (ui.btnRemoteStop) ui.btnRemoteStop.addEventListener('click', () => sendRemoteCommand('STOP'));
     if (ui.btnRemoteSchedule) ui.btnRemoteSchedule.addEventListener('click', sendRemoteSchedule);
     
-    // Secret Trigger Logic
+    // Secret Trigger Logic for Dashboard (Remote Section)
     if (ui.secretTriggerHeader) {
         let secretClicks = 0;
         let lastSecretClick = 0;
@@ -160,6 +161,31 @@ function bindEvents() {
                     ui.secRemote.style.display = isHidden ? 'block' : 'none';
                     if (isHidden) alert('Debug panel revealed');
                 }
+            }
+        });
+    }
+
+    // Tricky trigger to open "set timer start things"
+    const remoteTitle = document.querySelector('#sec-remote .card-title');
+    if (remoteTitle && ui.scheduleBox) {
+        let timerClicks = 0;
+        let lastTimerClick = 0;
+        remoteTitle.style.cursor = 'pointer';
+        remoteTitle.style.userSelect = 'none';
+        remoteTitle.addEventListener('click', () => {
+            const now = Date.now();
+            if (now - lastTimerClick < 500) {
+                timerClicks++;
+            } else {
+                timerClicks = 1;
+            }
+            lastTimerClick = now;
+
+            if (timerClicks >= 5) {
+                timerClicks = 0;
+                const isHidden = ui.scheduleBox.style.display === 'none';
+                ui.scheduleBox.style.display = isHidden ? 'flex' : 'none';
+                if (isHidden) showToast('Timer settings unlocked', 'info');
             }
         });
     }

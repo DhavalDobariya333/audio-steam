@@ -43,6 +43,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
     private lateinit var btnStandby: Button
+    private lateinit var btnDummyStart: Button
+    private lateinit var btnDummyStop: Button
     private lateinit var tvStatus: TextView
     private lateinit var vStatusDot: View
     private lateinit var tvConnection: TextView
@@ -60,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var debugPanel: View
     private var secretTapCount = 0
     private var lastSecretTapTime = 0L
+    private var isDummyRecording = false
 
     private lateinit var prefs: SharedPreferences
 
@@ -97,6 +100,8 @@ class MainActivity : AppCompatActivity() {
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
         btnStandby = findViewById(R.id.btnStandby)
+        btnDummyStart = findViewById(R.id.btnDummyStart)
+        btnDummyStop = findViewById(R.id.btnDummyStop)
         tvStatus = findViewById(R.id.tvStatus)
         vStatusDot = findViewById(R.id.vStatusDot)
         tvConnection = findViewById(R.id.tvConnection)
@@ -152,6 +157,19 @@ class MainActivity : AppCompatActivity() {
         btnStart.setOnClickListener { startService() }
         btnStop.setOnClickListener { stopService() }
         btnStandby.setOnClickListener { toggleStandby() }
+
+        btnDummyStart.setOnClickListener {
+            isDummyRecording = true
+            btnDummyStart.visibility = View.GONE
+            btnDummyStop.visibility = View.VISIBLE
+            updateUIForServiceState(AudioRecordService.isRunning)
+        }
+        btnDummyStop.setOnClickListener {
+            isDummyRecording = false
+            btnDummyStart.visibility = View.VISIBLE
+            btnDummyStop.visibility = View.GONE
+            updateUIForServiceState(AudioRecordService.isRunning)
+        }
 
         // Register broadcast receiver
         val filter = IntentFilter().apply {
@@ -269,9 +287,15 @@ class MainActivity : AppCompatActivity() {
                 tvStatus.setTextColor(Color.parseColor("#10b981"))
                 vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
             } else {
-                tvStatus.text = "○ Disconnected"
-                tvStatus.setTextColor(Color.parseColor("#555570"))
-                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+                if (isDummyRecording) {
+                    tvStatus.text = "● Local Recording..."
+                    tvStatus.setTextColor(Color.parseColor("#3b82f6"))
+                    vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
+                } else {
+                    tvStatus.text = "○ Disconnected"
+                    tvStatus.setTextColor(Color.parseColor("#555570"))
+                    vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+                }
             }
             etServerUrl.isEnabled = false
         } else if (AudioRecordService.isStandbyMode) {
@@ -285,9 +309,15 @@ class MainActivity : AppCompatActivity() {
                 tvStatus.setTextColor(Color.parseColor("#a78bfa"))
                 vStatusDot.setBackgroundColor(Color.parseColor("#a78bfa"))
             } else {
-                tvStatus.text = "○ Disconnected"
-                tvStatus.setTextColor(Color.parseColor("#555570"))
-                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+                if (isDummyRecording) {
+                    tvStatus.text = "● Local Recording..."
+                    tvStatus.setTextColor(Color.parseColor("#3b82f6"))
+                    vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
+                } else {
+                    tvStatus.text = "○ Disconnected"
+                    tvStatus.setTextColor(Color.parseColor("#555570"))
+                    vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+                }
             }
             etServerUrl.isEnabled = false
         } else {
@@ -301,9 +331,15 @@ class MainActivity : AppCompatActivity() {
                 tvStatus.setTextColor(Color.parseColor("#f87171"))
                 vStatusDot.setBackgroundColor(Color.parseColor("#f87171"))
             } else {
-                tvStatus.text = "○ Disconnected"
-                tvStatus.setTextColor(Color.parseColor("#555570"))
-                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+                if (isDummyRecording) {
+                    tvStatus.text = "● Local Recording..."
+                    tvStatus.setTextColor(Color.parseColor("#3b82f6"))
+                    vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
+                } else {
+                    tvStatus.text = "○ Disconnected"
+                    tvStatus.setTextColor(Color.parseColor("#555570"))
+                    vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+                }
             }
             etServerUrl.isEnabled = true
             tvDuration.text = "00:00"

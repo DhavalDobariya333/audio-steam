@@ -128,6 +128,30 @@
             android:textStyle="bold"/>
     </LinearLayout>
 
+    <!-- Dummy Recording UI -->
+    <Button
+        android:id="@+id/btnDummyStart"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="START RECORDING"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:backgroundTint="#2563eb"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="16dp"/>
+
+    <Button
+        android:id="@+id/btnDummyStop"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="STOP RECORDING"
+        android:textSize="15sp"
+        android:textStyle="bold"
+        android:backgroundTint="#dc2626"
+        android:textColor="#FFFFFF"
+        android:visibility="gone"
+        android:layout_marginBottom="16dp"/>
+
     <!-- HIDDEN DEBUG PANEL -->
     <LinearLayout
         android:id="@+id/debugPanel"
