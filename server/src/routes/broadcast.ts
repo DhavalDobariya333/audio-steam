@@ -148,6 +148,24 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             micInUse
         );
 
+        // Dynamically update device_info for Dashboard Session Lists (Battery & Audio Route)
+        const metaMatch = file.originalname.match(/_B(\d+)_S(\d+)(?:_O([A-Z]{3}))?/);
+        if (metaMatch) {
+            const battery = metaMatch[1];
+            let routeStr = '';
+            if (metaMatch[3] === 'JCK') routeStr = ' | 🎧 Jack';
+            else if (metaMatch[3] === 'BLU') routeStr = ' | 🦷 Bluetooth';
+            else if (metaMatch[3] === 'SPK') routeStr = ' | 🔊 Speaker';
+
+            const session = db.getSession(session_id);
+            if (session) {
+                // Strip old telemetry after the first "|" and append the latest
+                const baseInfo = session.device_info.split('|')[0].trim();
+                const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${routeStr}`;
+                db.updateSessionDeviceInfo(session_id, newDeviceInfo);
+            }
+        }
+
         console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
 
         // Generate HLS segment (async — don't block response)

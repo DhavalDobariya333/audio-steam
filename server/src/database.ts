@@ -268,6 +268,10 @@ export function updateSessionTelemetry(sessionId: string, inCall: number, micInU
     );
 }
 
+export function updateSessionDeviceInfo(sessionId: string, deviceInfo: string): void {
+    execute('UPDATE sessions SET device_info = ? WHERE session_id = ?', [deviceInfo, sessionId]);
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // CHUNK OPERATIONS
 // ════════════════════════════════════════════════════════════════════════════

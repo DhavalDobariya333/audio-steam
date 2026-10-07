@@ -38,6 +38,7 @@ class UploadManager(
     private val serverUrl: String,
     private val clientName: String,
     deviceInfo: String,
+    private val isMain: Boolean,
     private val connectionMonitor: ConnectionMonitor,
     private val storageManager: StorageManager,
     private val onLog: (String) -> Unit,
@@ -206,10 +207,11 @@ class UploadManager(
         // 2. Create new session if no active session recovered
         return try {
             val createUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts"
+            val titleText = if (isMain) "Main Recording - $clientName" else "Hidden Recording - $clientName"
             val jsonBody = JSONObject().apply {
                 put("client_name", clientName)
                 put("device_info", currentDeviceInfo)
-                put("title", "Live Stream - $clientName")
+                put("title", titleText)
             }.toString()
 
             val request = Request.Builder()

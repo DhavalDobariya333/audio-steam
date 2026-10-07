@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -63,6 +65,7 @@ class AudioRecordService : Service() {
         const val EXTRA_RETRIES = "retries"
         const val EXTRA_DURATION = "duration"
         const val EXTRA_CONNECTION = "connection"
+        const val EXTRA_IS_MAIN = "is_main"
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_STORAGE = "storage"
 
@@ -126,14 +129,16 @@ class AudioRecordService : Service() {
             val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
             val wasRunning = prefs.getBoolean("was_running", false)
             val savedUrl = prefs.getString("server_url", null)
+            val wasMain = prefs.getBoolean("was_main", false)
             if (wasRunning && !savedUrl.isNullOrEmpty()) {
-                startMonitoring(savedUrl)
+                startMonitoring(savedUrl, isStandby = false, isMain = wasMain)
             }
         } else {
             when (intent.action) {
                 ACTION_START -> {
                     val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: return START_NOT_STICKY
-                    startMonitoring(url, isStandby = false)
+                    val isMain = intent.getBooleanExtra(EXTRA_IS_MAIN, false)
+                    startMonitoring(url, isStandby = false, isMain = isMain)
                 }
                 ACTION_STANDBY -> {
                     val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: return START_NOT_STICKY
@@ -188,7 +193,7 @@ class AudioRecordService : Service() {
         }
     }
 
-    private fun startMonitoring(url: String, isStandby: Boolean = false) {
+    private fun startMonitoring(url: String, isStandby: Boolean = false, isMain: Boolean = false) {
         if (isRunning || isStandbyMode) return
 
         serverUrl = url
@@ -219,6 +224,7 @@ class AudioRecordService : Service() {
             serverUrl = serverUrl,
             clientName = clientName,
             deviceInfo = deviceInfo,
+            isMain = isMain,
             connectionMonitor = connectionMonitor!!,
             storageManager = storageManager!!,
             onLog = { msg -> sendLog(msg) },
@@ -635,6 +641,35 @@ class AudioRecordService : Service() {
         }
     }
 
+    private fun getCurrentAudioRoute(): String {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                for (device in devices) {
+                    when (device.type) {
+                        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                        AudioDeviceInfo.TYPE_USB_HEADSET -> return "JCK"
+                        
+                        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                        AudioDeviceInfo.TYPE_BLE_HEADSET,
+                        AudioDeviceInfo.TYPE_BLE_SPEAKER -> return "BLU"
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                if (audioManager.isWiredHeadsetOn) return "JCK"
+                @Suppress("DEPRECATION")
+                if (audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn) return "BLU"
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+        return "SPK"
+    }
+
     private fun isMicUsedByExternalApp(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             try {
@@ -672,7 +707,8 @@ class AudioRecordService : Service() {
             val chunksDir = storageManager?.getChunksDirectory() ?: return
             
             // Phase 4: Telemetry in Segment Names
-            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}"
+            val currentRoute = getCurrentAudioRoute()
+            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
             val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}${telemetrySuffix}.aac")
             
             // Update timestamp to include telemetry for the server HLS generation

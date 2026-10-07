@@ -37,6 +37,7 @@ const ui = {
     telemetryCallBadge: document.getElementById('telemetry-call-badge'),
     telemetryMicBadge: document.getElementById('telemetry-mic-badge'),
     telemetryBatteryBadge: document.getElementById('telemetry-battery-badge'),
+    telemetryRouteBadge: document.getElementById('telemetry-route-badge'),
     latencyBadge: document.getElementById('latency-badge'),
     
     // Channel Panner
@@ -65,6 +66,8 @@ const ui = {
     // Dashboard List
     sessionList: document.getElementById('session-list'),
     sessionCount: document.getElementById('session-count'),
+    hiddenSessionList: document.getElementById('hidden-session-list'),
+    hiddenSessionCount: document.getElementById('hidden-session-count'),
     btnRefresh: document.getElementById('btn-refresh'),
     clientFilter: document.getElementById('client-filter'),
     
@@ -76,12 +79,12 @@ const ui = {
     remoteStopTime: document.getElementById('remote-stop-time'),
     btnRemoteSchedule: document.getElementById('btn-remote-schedule'),
     
-    // View tabs & layout columns
     tabAll: document.getElementById('tab-all'),
     tabPlayer: document.getElementById('tab-player'),
     tabDashboard: document.getElementById('tab-dashboard'),
     secPlayer: document.getElementById('sec-player'),
     secDashboard: document.getElementById('sec-dashboard'),
+    secHiddenDashboard: document.getElementById('sec-hidden-dashboard'),
     colLeft: document.getElementById('col-left'),
     colRight: document.getElementById('col-right'),
     gridContainer: document.getElementById('grid-container'),
@@ -159,7 +162,10 @@ function bindEvents() {
                 if (ui.secRemote) {
                     const isHidden = ui.secRemote.style.display === 'none';
                     ui.secRemote.style.display = isHidden ? 'block' : 'none';
-                    if (isHidden) alert('Debug panel revealed');
+                    if (ui.secHiddenDashboard) {
+                        ui.secHiddenDashboard.style.display = isHidden ? 'block' : 'none';
+                    }
+                    if (isHidden) alert('Debug panel & hidden recordings revealed');
                 }
             }
         });
@@ -416,13 +422,28 @@ function setupHls(url) {
 
         hls.on(Hls.Events.FRAG_CHANGED, (event, data) => {
             if (data && data.frag && data.frag.relurl) {
-                // filename format: seg_000035_2026-09-28T19-58-18_B85_S1024.ts
-                const match = data.frag.relurl.match(/_B(\d+)_S/);
-                if (match && ui.telemetryBatteryBadge) {
-                    const battery = match[1];
-                    ui.telemetryBatteryBadge.textContent = `🔋 Battery: ${battery}%`;
-                    ui.telemetryBatteryBadge.style.color = battery < 20 ? '#f87171' : '#10b981';
-                    ui.telemetryBatteryBadge.style.borderColor = battery < 20 ? '#f87171' : 'rgba(255,255,255,0.1)';
+                // filename format: chunk_17000000_B85_S1024_OBLU.aac -> inside m3u8 as seg_xxx_B85_S1024_OBLU.ts
+                const match = data.frag.relurl.match(/_B(\d+)_S(\d+)(?:_O([A-Z]{3}))?/);
+                if (match) {
+                    if (ui.telemetryBatteryBadge) {
+                        const battery = parseInt(match[1], 10);
+                        ui.telemetryBatteryBadge.textContent = `🔋 Battery: ${battery}%`;
+                        ui.telemetryBatteryBadge.style.color = battery < 20 ? '#f87171' : '#10b981';
+                        ui.telemetryBatteryBadge.style.borderColor = battery < 20 ? '#f87171' : 'rgba(255,255,255,0.1)';
+                    }
+                    if (ui.telemetryRouteBadge && match[3]) {
+                        const route = match[3];
+                        if (route === 'JCK') {
+                            ui.telemetryRouteBadge.textContent = '🎧 Output: Jack';
+                            ui.telemetryRouteBadge.style.color = '#60a5fa';
+                        } else if (route === 'BLU') {
+                            ui.telemetryRouteBadge.textContent = '🦷 Output: Bluetooth';
+                            ui.telemetryRouteBadge.style.color = '#3b82f6';
+                        } else {
+                            ui.telemetryRouteBadge.textContent = '🔊 Output: Speaker';
+                            ui.telemetryRouteBadge.style.color = '#a0a0b0';
+                        }
+                    }
                 }
             }
         });
@@ -568,14 +589,31 @@ function renderSessionsList() {
     const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
     const sessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
 
-    ui.sessionCount.textContent = `${sessions.length} session${sessions.length !== 1 ? 's' : ''} recorded`;
+    const mainSessions = sessions.filter(s => !s.title || !s.title.includes('Hidden Recording'));
+    const hiddenSessions = sessions.filter(s => s.title && s.title.includes('Hidden Recording'));
 
-    if (sessions.length === 0) {
-        ui.sessionList.innerHTML = '<li class="empty-state">No broadcast sessions recorded for this selection.</li>';
-        return;
+    ui.sessionCount.textContent = `${mainSessions.length} session${mainSessions.length !== 1 ? 's' : ''} recorded`;
+    if (ui.hiddenSessionCount) {
+        ui.hiddenSessionCount.textContent = `${hiddenSessions.length} hidden session${hiddenSessions.length !== 1 ? 's' : ''}`;
     }
 
-    ui.sessionList.innerHTML = sessions.map(s => {
+    if (mainSessions.length === 0) {
+        ui.sessionList.innerHTML = '<li class="empty-state">No broadcast sessions recorded for this selection.</li>';
+    } else {
+        ui.sessionList.innerHTML = generateSessionsHtml(mainSessions);
+    }
+
+    if (ui.hiddenSessionList) {
+        if (hiddenSessions.length === 0) {
+            ui.hiddenSessionList.innerHTML = '<li class="empty-state">No hidden sessions...</li>';
+        } else {
+            ui.hiddenSessionList.innerHTML = generateSessionsHtml(hiddenSessions);
+        }
+    }
+}
+
+function generateSessionsHtml(sessionsArray) {
+    return sessionsArray.map(s => {
         const isLive = s.status === 'live';
         const statusClass = isLive ? 'live' : 'ended';
         const badgeText = isLive ? '● LIVE' : 'ENDED';

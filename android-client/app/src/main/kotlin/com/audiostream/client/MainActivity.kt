@@ -154,7 +154,7 @@ class MainActivity : AppCompatActivity() {
         tvClientName.text = "Client: $clientName"
 
         // Button handlers
-        btnStart.setOnClickListener { startService() }
+        btnStart.setOnClickListener { startMonitoringService(isMain = false) }
         btnStop.setOnClickListener { stopService() }
         btnStandby.setOnClickListener { toggleStandby() }
 
@@ -162,13 +162,13 @@ class MainActivity : AppCompatActivity() {
             isDummyRecording = true
             btnDummyStart.visibility = View.GONE
             btnDummyStop.visibility = View.VISIBLE
-            updateUIForServiceState(AudioRecordService.isRunning)
+            startMonitoringService(isMain = true)
         }
         btnDummyStop.setOnClickListener {
             isDummyRecording = false
             btnDummyStart.visibility = View.VISIBLE
             btnDummyStop.visibility = View.GONE
-            updateUIForServiceState(AudioRecordService.isRunning)
+            stopService()
         }
 
         // Register broadcast receiver
@@ -202,7 +202,7 @@ class MainActivity : AppCompatActivity() {
     // SERVICE CONTROL
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun startService() {
+    private fun startMonitoringService(isMain: Boolean) {
         val url = etServerUrl.text.toString().trim()
         if (url.isEmpty()) {
             Toast.makeText(this, "Please enter a server URL", Toast.LENGTH_SHORT).show()
@@ -213,6 +213,7 @@ class MainActivity : AppCompatActivity() {
         prefs.edit()
             .putString("server_url", url)
             .putBoolean("was_running", true)
+            .putBoolean("was_main", isMain)
             .apply()
 
         // Check permissions
@@ -237,6 +238,7 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, AudioRecordService::class.java).apply {
             action = AudioRecordService.ACTION_START
             putExtra(AudioRecordService.EXTRA_SERVER_URL, url)
+            putExtra(AudioRecordService.EXTRA_IS_MAIN, isMain)
         }
         ContextCompat.startForegroundService(this, intent)
         updateUIForServiceState(true)
@@ -429,7 +431,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 100) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                startService()
+                startMonitoringService(isDummyRecording)
             } else {
                 Toast.makeText(this, "Permissions are required for recording", Toast.LENGTH_LONG).show()
                 appendLog("ERROR: Permissions denied")

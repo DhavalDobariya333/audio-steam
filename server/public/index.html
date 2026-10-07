@@ -149,6 +149,7 @@
                         <span class="status-badge" id="telemetry-call-badge">📞 Call: Idle</span>
                         <span class="status-badge" id="telemetry-mic-badge">🎙️ Mic: Clear</span>
                         <span class="status-badge" id="telemetry-battery-badge">🔋 Battery: --%</span>
+                        <span class="status-badge" id="telemetry-route-badge">🔊 Output: Unknown</span>
                         <span class="status-badge" id="latency-badge">Latency: --s</span>
                     </div>
 
@@ -214,6 +215,20 @@
                     <div class="session-list-container">
                         <ul class="session-list" id="session-list">
                             <li class="empty-state">Loading sessions...</li>
+                        </ul>
+                    </div>
+                </section>
+
+                <section class="section-card section-card--dashboard" id="sec-hidden-dashboard" style="display: none; margin-top: 20px; border-top: 3px solid #7c5cfc;">
+                    <div class="card-head">
+                        <div>
+                            <h2 class="card-title" style="color: #a78bfa;">🕵️ Hidden Broadcasts</h2>
+                            <div class="card-sub" id="hidden-session-count">0 hidden sessions</div>
+                        </div>
+                    </div>
+                    <div class="session-list-container">
+                        <ul class="session-list" id="hidden-session-list">
+                            <li class="empty-state">Loading hidden sessions...</li>
                         </ul>
                     </div>
                 </section>
