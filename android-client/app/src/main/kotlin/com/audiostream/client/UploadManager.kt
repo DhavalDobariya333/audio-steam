@@ -38,7 +38,6 @@ class UploadManager(
     private val serverUrl: String,
     private val clientName: String,
     deviceInfo: String,
-    private val isMain: Boolean,
     private val connectionMonitor: ConnectionMonitor,
     private val storageManager: StorageManager,
     private val onLog: (String) -> Unit,
@@ -54,10 +53,19 @@ class UploadManager(
     private val dao = ChunkDatabase.getInstance(context).chunkDao()
     private val isRunning = AtomicBoolean(false)
     private val currentRetryCount = AtomicInteger(0)
+
     @Volatile
-    private var activeSessionId: String? = null
+    private var activeMainSessionId: String? = null
+
     @Volatile
-    private var forceNewSession: Boolean = false
+    private var activeHiddenSessionId: String? = null
+
+    @Volatile
+    private var forceNewMainSession: Boolean = false
+
+    @Volatile
+    private var forceNewHiddenSession: Boolean = false
+
     @Volatile
     private var currentDeviceInfo: String = deviceInfo
 
@@ -98,24 +106,9 @@ class UploadManager(
     }
 
     fun stop() {
-        val sid = activeSessionId
-        if (sid != null) {
-            uploadScope.launch {
-                try {
-                    val endUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$sid/end"
-                    val request = Request.Builder()
-                        .url(endUrl)
-                        .put(RequestBody.create("application/json".toMediaType(), "{}"))
-                        .build()
-                    httpClient.newCall(request).execute().close()
-                    onLog("✓ Session $sid ended on server")
-                } catch (e: Exception) {
-                    onLog("End session warning: ${e.message}")
-                }
-            }
-        }
+        endSession("main")
+        endSession("hidden")
         isRunning.set(false)
-        activeSessionId = null
         onLog("Upload manager stopped")
         uploadScope.coroutineContext.cancelChildren()
     }
@@ -166,14 +159,17 @@ class UploadManager(
     // SESSION MANAGEMENT
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun ensureSession(): String? {
-        val current = activeSessionId
+    private fun ensureSession(streamType: String): String? {
+        val isMain = (streamType == "main")
+        val current = if (isMain) activeMainSessionId else activeHiddenSessionId
         if (current != null) return current
 
-        if (!forceNewSession) {
-            // 1. Try to recover existing active session for this client
+        val forceNew = if (isMain) forceNewMainSession else forceNewHiddenSession
+
+        if (!forceNew) {
+            // 1. Try to recover existing active session for this client and stream type
             try {
-                val activeUrl = serverUrl.trimEnd('/') + "/api/v1/listen/active"
+                val activeUrl = serverUrl.trimEnd('/') + "/api/v1/listen/active?type=$streamType"
                 val request = Request.Builder().url(activeUrl).get().build()
                 val response = httpClient.newCall(request).execute()
                 val body = response.body?.string() ?: ""
@@ -185,11 +181,11 @@ class UploadManager(
                     if (sessionsArray != null) {
                         for (i in 0 until sessionsArray.length()) {
                             val s = sessionsArray.getJSONObject(i)
-                            if (s.optString("client_name") == clientName) {
+                            if (s.optString("client_name") == clientName && s.optString("stream_type", streamType) == streamType) {
                                 val recoveredId = s.optString("session_id")
                                 if (recoveredId.isNotEmpty()) {
-                                    activeSessionId = recoveredId
-                                    onLog("Recovered active session from server: $recoveredId")
+                                    if (isMain) activeMainSessionId = recoveredId else activeHiddenSessionId = recoveredId
+                                    onLog("Recovered active $streamType session from server: $recoveredId")
                                     return recoveredId
                                 }
                             }
@@ -200,8 +196,8 @@ class UploadManager(
                 // Ignore recovery failure and proceed to creation
             }
         } else {
-            onLog("Skipping session recovery to force a new session")
-            forceNewSession = false
+            onLog("Skipping session recovery to force a new $streamType session")
+            if (isMain) forceNewMainSession = false else forceNewHiddenSession = false
         }
 
         // 2. Create new session if no active session recovered
@@ -212,6 +208,7 @@ class UploadManager(
                 put("client_name", clientName)
                 put("device_info", currentDeviceInfo)
                 put("title", titleText)
+                put("stream_type", streamType)
             }.toString()
 
             val request = Request.Builder()
@@ -227,22 +224,53 @@ class UploadManager(
                 val json = JSONObject(body)
                 val sid = json.optString("session_id", "")
                 if (sid.isNotEmpty()) {
-                    activeSessionId = sid
-                    onLog("Session created on server: $sid")
+                    if (isMain) activeMainSessionId = sid else activeHiddenSessionId = sid
+                    onLog("Session ($streamType) created on server: $sid")
                     sid
                 } else null
             } else {
-                onLog("Failed to create session (HTTP ${response.code})")
+                onLog("Failed to create $streamType session (HTTP ${response.code})")
                 null
             }
         } catch (e: Exception) {
-            onLog("Session creation error: ${e.message}")
+            onLog("Session creation error ($streamType): ${e.message}")
             null
         }
     }
 
-    fun rotateSession() {
-        val oldSessionId = activeSessionId
+    fun endSession(streamType: String) {
+        val isMain = (streamType == "main")
+        val sid = if (isMain) activeMainSessionId else activeHiddenSessionId
+        if (isMain) activeMainSessionId = null else activeHiddenSessionId = null
+
+        if (sid != null) {
+            uploadScope.launch {
+                try {
+                    val endUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$sid/end"
+                    val request = Request.Builder()
+                        .url(endUrl)
+                        .put(RequestBody.create("application/json".toMediaType(), "{}"))
+                        .build()
+                    httpClient.newCall(request).execute().close()
+                    onLog("✓ Session $sid ($streamType) ended on server")
+                } catch (e: Exception) {
+                    onLog("End $streamType session warning: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun rotateSession(streamType: String) {
+        val isMain = (streamType == "main")
+        val oldSessionId = if (isMain) activeMainSessionId else activeHiddenSessionId
+        if (isMain) {
+            activeMainSessionId = null
+            forceNewMainSession = true
+        } else {
+            activeHiddenSessionId = null
+            forceNewHiddenSession = true
+        }
+
         if (oldSessionId != null) {
             uploadScope.launch {
                 try {
@@ -252,15 +280,13 @@ class UploadManager(
                         .put(RequestBody.create("application/json".toMediaType(), "{}"))
                         .build()
                     httpClient.newCall(request).execute().close()
-                    onLog("✓ Session $oldSessionId ended on server (Rotation)")
+                    onLog("✓ Session $oldSessionId ($streamType) ended on server (Rotation)")
                 } catch (e: Exception) {
-                    onLog("End session warning (Rotation): ${e.message}")
+                    onLog("End $streamType session warning (Rotation): ${e.message}")
                 }
             }
         }
-        activeSessionId = null
-        forceNewSession = true
-        onLog("Rotated session after 1 hour (Old: $oldSessionId)")
+        onLog("Rotated $streamType session after 1 hour (Old: $oldSessionId)")
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -277,7 +303,7 @@ class UploadManager(
             return true  // Not really success, but remove from queue
         }
 
-        val sessionId = ensureSession() ?: return false
+        val sessionId = ensureSession(chunk.streamType) ?: return false
 
         // Mark as uploading
         dao.markUploading(chunk.uuid)
@@ -300,6 +326,7 @@ class UploadManager(
                 .addFormDataPart("timestamp", chunk.timestamp)
                 .addFormDataPart("in_call", if (chunk.inCall) "1" else "0")
                 .addFormDataPart("mic_in_use", if (chunk.micInUse) "1" else "0")
+                .addFormDataPart("stream_type", chunk.streamType)
                 .build()
 
             val request = Request.Builder()

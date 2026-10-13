@@ -23,12 +23,14 @@ const router = Router();
 
 router.get('/active', (req: Request, res: Response) => {
     try {
-        const sessions = db.getActiveSessions();
+        const streamType = req.query.type as string | undefined;
+        const sessions = db.getActiveSessions(streamType);
 
         const result = sessions.map(s => ({
             session_id: s.session_id,
             title: s.title,
             client_name: s.client_name,
+            stream_type: s.stream_type,
             created_at: s.created_at,
             total_duration: s.total_duration,
             total_chunks: s.total_chunks,
@@ -53,13 +55,15 @@ router.get('/sessions', (req: Request, res: Response) => {
     try {
         const limit = parseInt(req.query.limit as string || '50', 10);
         const offset = parseInt(req.query.offset as string || '0', 10);
+        const streamType = req.query.type as string | undefined;
 
-        const sessions = db.listSessions(limit, offset);
+        const sessions = db.listSessions(limit, offset, streamType);
 
         const result = sessions.map(s => ({
             session_id: s.session_id,
             title: s.title,
             client_name: s.client_name,
+            stream_type: s.stream_type,
             status: s.status,
             created_at: s.created_at,
             ended_at: s.ended_at,

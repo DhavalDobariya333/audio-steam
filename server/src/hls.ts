@@ -1,17 +1,12 @@
 /**
- * hls.ts — FFmpeg-based HLS playlist generator.
+ * hls.ts — FFmpeg-based HLS playlist generator with Discontinuity & Fast-path metadata.
  *
  * Converts incoming raw audio chunks into HLS-compatible segments:
- *   1. Takes a raw audio chunk (WAV/PCM)
- *   2. Encodes it to AAC via FFmpeg
- *   3. Outputs a .ts segment file
- *   4. Maintains the .m3u8 playlist (live sliding window + VOD)
- *
- * Playlist types:
- *   - live.m3u8:  Sliding window for live listeners (last N segments)
- *   - vod.m3u8:   Complete list for DVR / past recording playback
- *
- * Requires FFmpeg in system PATH.
+ *   1. Takes a raw audio chunk (AAC/PCM)
+ *   2. Encodes/packages it via FFmpeg into a .ts segment file
+ *   3. Maintains the .m3u8 playlists (live sliding window + full VOD)
+ *   4. Emits #EXT-X-DISCONTINUITY tags whenever sequence gaps (silence/drops) occur
+ *   5. Avoids spawning ffprobe per chunk when duration_ms is provided by the client
  */
 
 import { exec, spawn } from 'child_process';
@@ -48,12 +43,15 @@ export function checkFfmpeg(): boolean {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// HLS GENERATION QUEUE (Prevents fork-bombs and race conditions)
+// HLS GENERATION QUEUE & STATE
 // ════════════════════════════════════════════════════════════════════════════
 
 type Task = () => Promise<void>;
 const hlsQueues = new Map<string, Task[]>();
 const isProcessing = new Set<string>();
+
+// Track sequence numbers per session to detect silence/drops for #EXT-X-DISCONTINUITY
+const lastSequenceNums = new Map<string, number>();
 
 function enqueueHlsTask(sessionId: string, task: Task) {
     if (!hlsQueues.has(sessionId)) {
@@ -65,39 +63,45 @@ function enqueueHlsTask(sessionId: string, task: Task) {
 
 async function processNextHlsTask(sessionId: string) {
     if (isProcessing.has(sessionId)) return;
-    
+
     const queue = hlsQueues.get(sessionId)!;
     if (queue.length === 0) return;
-    
+
     isProcessing.add(sessionId);
     const task = queue.shift()!;
-    
+
     try {
         await task();
     } catch (err) {
         console.error(`[hls] Task error for session ${sessionId}:`, err);
     }
-    
+
     isProcessing.delete(sessionId);
-    processNextHlsTask(sessionId); // Run next in queue
+    processNextHlsTask(sessionId);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // HLS SEGMENT GENERATION
 // ════════════════════════════════════════════════════════════════════════════
 
+export interface SegmentInfo {
+    filename: string;
+    duration: number;
+    discontinuity: boolean;
+}
+
 export async function appendToHLS(
     sessionId: string,
     chunkPath: string,
     sequenceNum: number,
-    clientTimestamp?: string
+    clientTimestamp?: string,
+    durationMs?: number
 ): Promise<boolean> {
     if (!ffmpegAvailable) return false;
 
-    // Enqueue the heavy work to prevent race conditions and limit concurrency
     return new Promise((resolve) => {
         enqueueHlsTask(sessionId, async () => {
-            const success = await _processHlsChunk(sessionId, chunkPath, sequenceNum, clientTimestamp);
+            const success = await _processHlsChunk(sessionId, chunkPath, sequenceNum, clientTimestamp, durationMs);
             resolve(success);
         });
     });
@@ -107,7 +111,8 @@ async function _processHlsChunk(
     sessionId: string,
     chunkPath: string,
     sequenceNum: number,
-    clientTimestamp?: string
+    clientTimestamp?: string,
+    durationMs?: number
 ): Promise<boolean> {
     const hlsDir = getHlsDir(sessionId);
     fs.mkdirSync(hlsDir, { recursive: true });
@@ -116,7 +121,16 @@ async function _processHlsChunk(
     const segmentFilename = `seg_${sequenceNum.toString().padStart(6, '0')}_${dateStr}.ts`;
     const segmentPath = path.join(hlsDir, segmentFilename);
 
-    // ── Step 1: Transcode raw chunk → AAC .ts segment ──
+    // Detect if this segment represents a discontinuity (e.g. Silence skipped or dropped chunks)
+    const prevSeq = lastSequenceNums.get(sessionId);
+    const isDiscontinuity = prevSeq !== undefined && sequenceNum > prevSeq + 1;
+    lastSequenceNums.set(sessionId, sequenceNum);
+
+    if (isDiscontinuity) {
+        console.log(`[hls] Discontinuity detected for session ${sessionId}: seq ${prevSeq} -> ${sequenceNum}`);
+    }
+
+    // ── Step 1: Transcode / Package raw chunk → MPEG-TS segment ──
     try {
         await runFfmpeg([
             '-y',
@@ -134,22 +148,28 @@ async function _processHlsChunk(
         return false;
     }
 
-    // ── Step 2: Get segment duration (Async) ──
-    let segDuration = HLS_SEGMENT_DURATION;
-    try {
-        const { stdout } = await execAsync(
-            `"${FFPROBE_PATH}" -v quiet -show_entries format=duration -of csv=p=0 "${segmentPath}"`,
-            { encoding: 'utf-8' }
-        );
-        const parsed = parseFloat(stdout.trim());
-        if (!isNaN(parsed) && parsed > 0) segDuration = parsed;
-    } catch {
-        // Default to HLS_SEGMENT_DURATION on error
+    // ── Step 2: Get segment duration (Fast Path: client metadata; Fallback: ffprobe) ──
+    let segDuration: number;
+    if (durationMs && durationMs > 0) {
+        segDuration = durationMs / 1000.0;
+    } else {
+        // Fallback to ffprobe only if client did not supply duration
+        segDuration = HLS_SEGMENT_DURATION;
+        try {
+            const { stdout } = await execAsync(
+                `"${FFPROBE_PATH}" -v quiet -show_entries format=duration -of csv=p=0 "${segmentPath}"`,
+                { encoding: 'utf-8' }
+            );
+            const parsed = parseFloat(stdout.trim());
+            if (!isNaN(parsed) && parsed > 0) segDuration = parsed;
+        } catch {
+            // Default to HLS_SEGMENT_DURATION on error
+        }
     }
 
     // ── Step 3: Update playlists ──
-    await updateLivePlaylist(hlsDir, segmentFilename, segDuration, sequenceNum);
-    await updateVodPlaylist(hlsDir, segmentFilename, segDuration);
+    await updateLivePlaylist(hlsDir, segmentFilename, segDuration, sequenceNum, isDiscontinuity);
+    await updateVodPlaylist(hlsDir, segmentFilename, segDuration, isDiscontinuity);
 
     return true;
 }
@@ -162,35 +182,49 @@ async function updateLivePlaylist(
     hlsDir: string,
     segmentFilename: string,
     duration: number,
-    sequenceNum: number
+    sequenceNum: number,
+    discontinuity: boolean
 ): Promise<void> {
     const playlistPath = path.join(hlsDir, 'live.m3u8');
-    const segments: { filename: string; duration: number }[] = [];
+    const segments: SegmentInfo[] = [];
     let mediaSequence = 0;
 
     try {
         const content = await fsPromises.readFile(playlistPath, 'utf-8');
         const lines = content.split('\n');
-        
-        for (const line of lines) {
-            const seqMatch = line.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/);
-            if (seqMatch) mediaSequence = parseInt(seqMatch[1], 10);
-        }
 
+        let nextDiscontinuity = false;
         for (let i = 0; i < lines.length; i++) {
-            const extInfMatch = lines[i].match(/^#EXTINF:([\d.]+)/);
+            const line = lines[i].trim();
+            const seqMatch = line.match(/^#EXT-X-MEDIA-SEQUENCE:(\d+)/);
+            if (seqMatch) {
+                mediaSequence = parseInt(seqMatch[1], 10);
+            }
+
+            if (line === '#EXT-X-DISCONTINUITY') {
+                nextDiscontinuity = true;
+                continue;
+            }
+
+            const extInfMatch = line.match(/^#EXTINF:([\d.]+)/);
             if (extInfMatch && i + 1 < lines.length && !lines[i + 1].startsWith('#')) {
                 segments.push({
                     filename: lines[i + 1].trim(),
                     duration: parseFloat(extInfMatch[1]),
+                    discontinuity: nextDiscontinuity,
                 });
+                nextDiscontinuity = false;
             }
         }
-    } catch (e) {
-        // File doesn't exist yet, which is fine
+    } catch {
+        // File doesn't exist yet
     }
 
-    segments.push({ filename: segmentFilename, duration });
+    segments.push({
+        filename: segmentFilename,
+        duration,
+        discontinuity,
+    });
 
     while (segments.length > HLS_LIST_SIZE) {
         segments.shift();
@@ -206,6 +240,9 @@ async function updateLivePlaylist(
     m3u8 += '\n';
 
     for (const seg of segments) {
+        if (seg.discontinuity) {
+            m3u8 += '#EXT-X-DISCONTINUITY\n';
+        }
         m3u8 += `#EXTINF:${seg.duration.toFixed(6)},\n`;
         m3u8 += `${seg.filename}\n`;
     }
@@ -219,30 +256,44 @@ async function updateLivePlaylist(
 async function updateVodPlaylist(
     hlsDir: string,
     segmentFilename: string,
-    duration: number
+    duration: number,
+    discontinuity: boolean
 ): Promise<void> {
     const playlistPath = path.join(hlsDir, 'vod.m3u8');
-    const segments: { filename: string; duration: number }[] = [];
+    const segments: SegmentInfo[] = [];
 
     try {
         const content = await fsPromises.readFile(playlistPath, 'utf-8');
         const lines = content.split('\n');
 
+        let nextDiscontinuity = false;
         for (let i = 0; i < lines.length; i++) {
-            const extInfMatch = lines[i].match(/^#EXTINF:([\d.]+)/);
+            const line = lines[i].trim();
+            if (line === '#EXT-X-DISCONTINUITY') {
+                nextDiscontinuity = true;
+                continue;
+            }
+
+            const extInfMatch = line.match(/^#EXTINF:([\d.]+)/);
             if (extInfMatch && i + 1 < lines.length && !lines[i + 1].startsWith('#') && lines[i + 1].trim()) {
                 segments.push({
                     filename: lines[i + 1].trim(),
                     duration: parseFloat(extInfMatch[1]),
+                    discontinuity: nextDiscontinuity,
                 });
+                nextDiscontinuity = false;
             }
         }
-    } catch (e) {
+    } catch {
         // File doesn't exist yet
     }
 
     if (!segments.some(s => s.filename === segmentFilename)) {
-        segments.push({ filename: segmentFilename, duration });
+        segments.push({
+            filename: segmentFilename,
+            duration,
+            discontinuity,
+        });
     }
 
     const targetDuration = Math.ceil(Math.max(...segments.map(s => s.duration), HLS_SEGMENT_DURATION));
@@ -255,6 +306,9 @@ async function updateVodPlaylist(
     m3u8 += '\n';
 
     for (const seg of segments) {
+        if (seg.discontinuity) {
+            m3u8 += '#EXT-X-DISCONTINUITY\n';
+        }
         m3u8 += `#EXTINF:${seg.duration.toFixed(6)},\n`;
         m3u8 += `${seg.filename}\n`;
     }
@@ -266,7 +320,7 @@ async function updateVodPlaylist(
 }
 
 export function finalizeHLS(sessionId: string): void {
-    // We should enqueue this as well to prevent race conditions during finalize
+    lastSequenceNums.delete(sessionId);
     enqueueHlsTask(sessionId, async () => {
         const hlsDir = getHlsDir(sessionId);
         const vodPath = path.join(hlsDir, 'vod.m3u8');
@@ -298,12 +352,12 @@ function runFfmpeg(args: string[]): Promise<void> {
             if (code === 0) {
                 resolve();
             } else {
-                reject(new Error(`FFmpeg exit code ${code}: ${stderr.slice(-500)}`));
+                reject(new Error(`FFmpeg exited with code ${code}: ${stderr}`));
             }
         });
 
         proc.on('error', (err) => {
-            reject(new Error(`FFmpeg spawn error: ${err.message}`));
+            reject(err);
         });
     });
 }

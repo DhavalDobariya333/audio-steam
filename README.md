@@ -5,55 +5,58 @@ A production-grade, fault-tolerant live audio streaming, HLS transcoding, and ti
 ## 🏗️ System Architecture
 
 ```
-┌────────────────────────┐         HTTP POST /chunk         ┌──────────────────────────┐
-│  Android Client (App)  │ ───────────────────────────────> │  Node.js / Express Server│
-│  - Mic Capture (16kHz) │  (FIFO Queue, Offline-First)     │  - Ingest API            │
-│  - Silence Detection   │                                  │  - HLS Transcoder (FFmpeg)│
-│  - Foreground Service  │                                  │  - SQLite (sql.js)       │
-└────────────────────────┘                                  └────────────┬─────────────┘
-                                                                         │
-                                                                         │ HLS Stream (.m3u8)
-                                                                         ▼
-                                                            ┌──────────────────────────┐
-                                                            │  Web Dashboard & Listener│
-                                                            │  - HLS.js Live Player    │
-                                                            │  - Playback Speed Controls│
-                                                            │  - Multi-Device Filter   │
-                                                            └──────────────────────────┘
+┌────────────────────────┐    HTTP POST /api/v1/broadcasts/:id/chunk    ┌──────────────────────────┐
+│  Android Client (App)  │ ───────────────────────────────────────────> │  Node.js / Express Server│
+│  - Mic Capture (16kHz) │         (FIFO Queue, Offline-First)          │  - Ingest API            │
+│  - Hardware AAC Encode │                                              │  - HLS Engine (FFmpeg)   │
+│  - Silence Detection   │                                              │  - SQLite (WAL mode)     │
+│  - Foreground Service  │                                              └────────────┬─────────────┘
+└────────────────────────┘                                                           │
+                                                                                     │ HLS Stream (.m3u8)
+                                                                                     ▼
+                                                                        ┌──────────────────────────┐
+                                                                        │  Web Dashboard & Listener│
+                                                                        │  - HLS.js Live Player    │
+                                                                        │  - Playback Speed Controls│
+                                                                        │  - Multi-Device Filter   │
+                                                                        └──────────────────────────┘
 ```
 
 ---
 
 ## 📂 Project Structure
 
-- **`server/`** — Node.js / TypeScript + Express backend. Handles audio chunk ingestion, HLS transcoding (`FFmpeg`), SQLite state management, and serves the unified web SPA.
+- **`server/`** — Node.js / TypeScript + Express backend. Handles audio chunk ingestion, HLS packaging (`FFmpeg`), SQLite state management with WAL mode, and serves the web dashboard SPA.
 - **`server/public/`** — Unified Single Page Application (SPA) HTML5 HLS Player, Frequency Visualizer, and Admin Dashboard.
-- **`android-client/`** — Kotlin application. Captures mic audio in a Foreground Service, buffers chunks locally in Room DB, and streams to server with zero data loss.
+- **`android-client/`** — Native Kotlin Android application. Captures mic audio in a Foreground Service, encodes to 16kbps AAC via hardware `MediaCodec`, buffers chunks locally in Room DB, and streams to server.
+- **`stream-downloader/`** — Node.js utility to download HLS audio segments in parallel and merge them into a single clean `.mp3`.
 
 ---
 
-## 🚀 Server Setup & Local Running
+## 🚀 Server Setup & Running
 
-1. **Install Dependencies & Build**:
-   ```bash
-   cd server
-   npm install
-   npm run build
-   ```
+### 1. Local Development
+```bash
+cd server
+npm install
+npm run build
+npm start
+```
 
-2. **Run Dev / Production Server**:
-   ```bash
-   # Development
-   npm run dev
+### 2. Docker Deployment
+```bash
+cd server
+docker build -t audio-stream-server .
+docker run -p 8765:8765 -e PORT=8765 audio-stream-server
+```
 
-   # Production
-   npm start
-   ```
-
-3. **Endpoints**:
-   - **Dashboard / Unified Player**: `http://localhost:8765/`
-   - **Ingest API**: `http://localhost:8765/api/v1/broadcasts`
-   - **Health Check**: `http://localhost:8765/api/v1/health`
+### 3. Exposing via Cloudflare Tunnel (Free Public URL)
+To allow Android devices outside your local network to stream to your server:
+```bash
+# Start a free TryCloudflare tunnel pointing to your server
+cloudflared tunnel --url http://localhost:8765
+```
+Use the generated `https://<random-id>.trycloudflare.com` URL as the server URL in the Android app.
 
 ---
 
@@ -78,11 +81,21 @@ A production-grade, fault-tolerant live audio streaming, HLS transcoding, and ti
 
 ---
 
-## ✨ Features Implemented
+## 🛠️ Stream Downloader & Combiner
 
-- **Fault-Tolerant Recording**: Android client captures mic input continuously regardless of network drops.
-- **Silence Detection**: Client computes RMS volume to skip empty silence chunks and reduce storage/bandwidth consumption.
-- **Session Auto-Recovery**: Client resumes active live broadcast session on server after app restarts.
-- **HLS Live & VOD**: Real-time HLS transcoding for live streaming + event archive playlists for time-shifted playback.
-- **Rich Dashboard & Player**: Playback speed selector (0.5x - 2x), live lag / latency status badges, buffering indicators, and multi-device filtering.
+To download all audio chunks from a live/past session and merge into an MP3:
+```bash
+cd stream-downloader
+npm install
+node download_chunks.js <SESSION_ID>
+node combine_chunks.js ./downloaded_chunks/<SESSION_ID> ./output.mp3
+```
 
+---
+
+## ✨ Key Technical Invariants
+
+- **Hardware AAC Encoding**: Client encodes directly to AAC (16kbps mono) saving 90% bandwidth compared to raw PCM/WAV.
+- **Fault-Tolerant FIFO Queue**: Chunks are persisted in Android Room DB before upload and deleted only upon confirmed HTTP 200 server response.
+- **Continuous HLS & Discontinuity Handling**: Server maintains live sliding window and full VOD playlists with `#EXT-X-DISCONTINUITY` markers on silence/network breaks.
+- **Reliable Storage Engine**: Server runs SQLite in Write-Ahead Logging (WAL) mode for fast, non-blocking page writes.

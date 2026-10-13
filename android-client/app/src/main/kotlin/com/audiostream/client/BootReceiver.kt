@@ -39,6 +39,7 @@ class BootReceiver : BroadcastReceiver() {
                 val serviceIntent = Intent(context, AudioRecordService::class.java).apply {
                     this.action = AudioRecordService.ACTION_START
                     putExtra(AudioRecordService.EXTRA_SERVER_URL, serverUrl)
+                    putExtra(AudioRecordService.EXTRA_IS_MAIN, false)
                 }
                 ContextCompat.startForegroundService(context, serviceIntent)
             } catch (e: Exception) {

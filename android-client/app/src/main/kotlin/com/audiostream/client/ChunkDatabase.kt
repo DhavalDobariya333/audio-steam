@@ -59,7 +59,10 @@ data class AudioChunk(
     val inCall: Boolean = false,
 
     @ColumnInfo(name = "mic_in_use")
-    val micInUse: Boolean = false
+    val micInUse: Boolean = false,
+
+    @ColumnInfo(name = "stream_type")
+    val streamType: String = "hidden"
 )
 
 
@@ -135,7 +138,7 @@ interface ChunkDao {
 // DATABASE
 // ══════════════════════════════════════════════════════════════════════════════
 
-@Database(entities = [AudioChunk::class], version = 2, exportSchema = false)
+@Database(entities = [AudioChunk::class], version = 3, exportSchema = false)
 abstract class ChunkDatabase : RoomDatabase() {
     abstract fun chunkDao(): ChunkDao
 

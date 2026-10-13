@@ -21,6 +21,7 @@ import { checkFfmpeg, finalizeHLS } from './hls';
 import broadcastRoutes from './routes/broadcast';
 import dashboardRoutes from './routes/dashboard';
 import listenRoutes from './routes/listen';
+import { initWebSocketServer } from './websocket';
 
 // ════════════════════════════════════════════════════════════════════════════
 // APPLICATION SETUP
@@ -35,7 +36,8 @@ const basicAuth = (req: express.Request, res: express.Response, next: express.Ne
         req.path.startsWith('/api/v1/broadcasts') || 
         req.path === '/api/v1/listen/active' ||
         req.path.startsWith('/api/v1/health') ||
-        req.path.startsWith('/storage')
+        req.path.startsWith('/storage') ||
+        req.path.startsWith('/ws')
     ) {
         return next();
     }
@@ -96,7 +98,12 @@ app.use('/storage', express.static(path.join(PUBLIC_DIR, 'storage'), {
 // Unified Single Page App (SPA) — served from PUBLIC_DIR
 app.use(express.static(PUBLIC_DIR));
 
-// Direct routes for /, /dashboard, /listener → serve SPA
+// Hidden stealth dashboard route
+app.get(['/hidden', '/hidden/*'], (_req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, 'hidden.html'));
+});
+
+// Direct routes for /, /dashboard, /listener → serve innocent Main SPA
 app.get(['/', '/dashboard', '/dashboard/*', '/listener', '/listener/*'], (_req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
@@ -146,6 +153,9 @@ async function start(): Promise<void> {
         console.log('\n  (Note: If hosted on Render, replace "http://localhost:8765"');
         console.log('         with your actual Render domain like "https://your-app.onrender.com")\n');
     });
+
+    // 6. Initialize Real-Time WebSocket Gateway
+    initWebSocketServer(server);
 
     // ── Graceful Shutdown ──
     const shutdown = (signal: string) => {

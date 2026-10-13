@@ -35,7 +35,9 @@ android-client/app/build/
 android-client/build/
 android-client/local.properties
 android-client/.tools/
-!*.apk
+*.apk
+!/app.apk
+!/AudioStreamApp-latest.apk
 *.aab
 *.keystore
 *.jks
@@ -52,3 +54,7 @@ Thumbs.db
 
 # Archives
 *.zip
+
+# Antigravity / AI Agents
+.agents/
+.gemini/

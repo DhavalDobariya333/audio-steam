@@ -22,9 +22,10 @@ router.get('/sessions', (req: Request, res: Response) => {
     try {
         const limit = parseInt(req.query.limit as string || '100', 10);
         const offset = parseInt(req.query.offset as string || '0', 10);
+        const streamType = req.query.type as string | undefined;
 
-        const sessions = db.listSessions(limit, offset);
-        const totalCount = db.getSessionCount();
+        const sessions = db.listSessions(limit, offset, streamType);
+        const totalCount = db.getSessionCount(streamType);
         const storageInfo = storage.getStorageInfo();
 
         res.json({
@@ -103,7 +104,8 @@ router.delete('/sessions/:session_id', (req: Request, res: Response) => {
 
 router.get('/stats', (req: Request, res: Response) => {
     try {
-        const stats = db.getStats();
+        const streamType = req.query.type as string | undefined;
+        const stats = db.getStats(streamType);
         const storageInfo = storage.getStorageInfo();
 
         res.json({

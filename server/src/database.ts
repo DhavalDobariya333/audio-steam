@@ -1,40 +1,51 @@
 /**
- * database.ts — SQLite database manager using sql.js (pure WASM).
+ * database.ts — SQLite database manager using better-sqlite3 with Write-Ahead Logging (WAL).
  *
- * sql.js is a pure JavaScript/WASM SQLite implementation that requires
- * NO native compilation — works on any platform without VC++ toolset.
- *
- * The database is persisted to disk by manually reading/writing the
- * binary database file. We auto-save after every write operation.
+ * Replaces sql.js (in-memory WASM full-memory export dumps) with native WAL-mode
+ * SQLite. Provides high-throughput, non-blocking page-level writes without
+ * stalling the Node.js event loop.
  */
 
-// @ts-ignore
-import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { DATABASE_PATH } from './config';
 
-let db: SqlJsDatabase;
+let db: Database.Database | null = null;
 
 // ════════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ════════════════════════════════════════════════════════════════════════════
 
-export async function initDatabase(): Promise<void> {
-    const SQL = await initSqlJs();
+export function initDatabase(): void {
+    // Ensure parent directory exists
+    fs.mkdirSync(path.dirname(DATABASE_PATH), { recursive: true });
 
-    // Load existing database from disk if it exists
+    // Validate existing file is a valid SQLite DB (recovers from corrupted/zero-filled files)
     if (fs.existsSync(DATABASE_PATH)) {
-        const fileBuffer = fs.readFileSync(DATABASE_PATH);
-        db = new SQL.Database(fileBuffer);
-    } else {
-        // Ensure parent directory exists
-        fs.mkdirSync(path.dirname(DATABASE_PATH), { recursive: true });
-        db = new SQL.Database();
+        try {
+            const fd = fs.openSync(DATABASE_PATH, 'r');
+            const header = Buffer.alloc(16);
+            fs.readSync(fd, header, 0, 16, 0);
+            fs.closeSync(fd);
+            if (!header.toString('utf8').startsWith('SQLite format 3')) {
+                console.warn(`[database] Corrupted non-SQLite file detected at ${DATABASE_PATH}. Resetting database file.`);
+                fs.renameSync(DATABASE_PATH, `${DATABASE_PATH}.corrupted.${Date.now()}`);
+            }
+        } catch (e) {
+            console.warn('[database] Failed checking database file header:', e);
+        }
     }
 
+    db = new Database(DATABASE_PATH);
+
+    // Enable WAL mode & performance tuning
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('foreign_keys = ON');
+
     // Create tables
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id      TEXT    UNIQUE NOT NULL,
@@ -48,11 +59,10 @@ export async function initDatabase(): Promise<void> {
             client_name     TEXT    DEFAULT '',
             device_info     TEXT    DEFAULT '',
             in_call         INTEGER DEFAULT 0,
-            mic_in_use      INTEGER DEFAULT 0
+            mic_in_use      INTEGER DEFAULT 0,
+            stream_type     TEXT    NOT NULL DEFAULT 'hidden'
         );
-    `);
 
-    db.run(`
         CREATE TABLE IF NOT EXISTS device_commands (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id           TEXT    UNIQUE NOT NULL,
@@ -64,26 +74,7 @@ export async function initDatabase(): Promise<void> {
             stop_time           TEXT    DEFAULT '',
             updated_at          TEXT    NOT NULL
         );
-    `);
 
-    // Attempt to add 'status', 'auto_screenshot', and 'screenshot_interval' columns if migrating from an older DB version
-    try {
-        db.run("ALTER TABLE device_commands ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
-    } catch { }
-    try {
-        db.run("ALTER TABLE device_commands ADD COLUMN auto_screenshot INTEGER NOT NULL DEFAULT 0");
-    } catch { }
-    try {
-        db.run("ALTER TABLE device_commands ADD COLUMN screenshot_interval INTEGER NOT NULL DEFAULT 30");
-    } catch { }
-    try {
-        db.run("ALTER TABLE device_commands ADD COLUMN start_time TEXT DEFAULT ''");
-    } catch { }
-    try {
-        db.run("ALTER TABLE device_commands ADD COLUMN stop_time TEXT DEFAULT ''");
-    } catch { }
-
-    db.run(`
         CREATE TABLE IF NOT EXISTS chunks (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             chunk_id        TEXT    UNIQUE NOT NULL,
@@ -100,70 +91,57 @@ export async function initDatabase(): Promise<void> {
             mic_in_use      INTEGER DEFAULT 0,
             FOREIGN KEY (session_id) REFERENCES sessions(session_id)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
+        CREATE INDEX IF NOT EXISTS idx_chunks_sequence ON chunks(session_id, sequence_num);
+        CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_session_seq ON chunks(session_id, sequence_num);
     `);
 
-    // Create indexes (using IF NOT EXISTS)
-    db.run('CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id)');
-    db.run('CREATE INDEX IF NOT EXISTS idx_chunks_sequence ON chunks(session_id, sequence_num)');
-    db.run('CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)');
-
-    // Unique constraint for duplicate detection
+    // Schema migrations for existing databases
     try {
-        db.run('CREATE UNIQUE INDEX idx_chunks_session_seq ON chunks(session_id, sequence_num)');
-    } catch {
-        // Index already exists
-    }
-
-    saveToDisk();
-    console.log(`[database] Initialized: ${DATABASE_PATH}`);
-}
-
-/** Persist the in-memory database to disk. */
-function saveToDisk(): void {
-    if (!db) return;
+        db.exec("ALTER TABLE sessions ADD COLUMN stream_type TEXT NOT NULL DEFAULT 'hidden'");
+    } catch { }
     try {
-        const data = db.export();
-        const buffer = Buffer.from(data);
-        fs.writeFileSync(DATABASE_PATH, buffer);
-    } catch (err) {
-        console.error('[database] Failed to save to disk:', err);
-    }
+        db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_stream_type ON sessions(stream_type)");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN auto_screenshot INTEGER NOT NULL DEFAULT 0");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN screenshot_interval INTEGER NOT NULL DEFAULT 30");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN start_time TEXT DEFAULT ''");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN stop_time TEXT DEFAULT ''");
+    } catch { }
+
+    console.log(`[database] Initialized better-sqlite3 in WAL mode: ${DATABASE_PATH}`);
 }
 
-// Auto-save interval (every 5 seconds as a safety net)
-let saveInterval: NodeJS.Timeout;
-function startAutoSave(): void {
-    saveInterval = setInterval(saveToDisk, 5000);
-}
-
-function getDb(): SqlJsDatabase {
+function getDb(): Database.Database {
     if (!db) throw new Error('Database not initialized. Call initDatabase() first.');
     return db;
 }
 
-/** Helper: run a query and return all rows as plain objects. */
-function queryAll(sql: string, params: any[] = []): any[] {
-    const stmt = getDb().prepare(sql);
-    if (params.length > 0) stmt.bind(params);
-
-    const results: any[] = [];
-    while (stmt.step()) {
-        results.push(stmt.getAsObject());
-    }
-    stmt.free();
-    return results;
+/** Helper: run a query and return all rows. */
+function queryAll<T = any>(sql: string, params: any[] = []): T[] {
+    return getDb().prepare(sql).all(...params) as T[];
 }
 
 /** Helper: run a query and return the first row. */
-function queryOne(sql: string, params: any[] = []): any | undefined {
-    const rows = queryAll(sql, params);
-    return rows.length > 0 ? rows[0] : undefined;
+function queryOne<T = any>(sql: string, params: any[] = []): T | undefined {
+    return getDb().prepare(sql).get(...params) as T | undefined;
 }
 
 /** Helper: run a write statement. */
-function execute(sql: string, params: any[] = []): void {
-    getDb().run(sql, params);
-    saveToDisk();
+function execute(sql: string, params: any[] = []): Database.RunResult {
+    return getDb().prepare(sql).run(...params);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -184,33 +162,43 @@ export interface Session {
     device_info: string;
     in_call: number;
     mic_in_use: number;
+    stream_type: string;
 }
 
-export function createSession(sessionId: string, clientName: string = '', deviceInfo: string = '', title: string = ''): Session {
+export function createSession(sessionId: string, clientName: string = '', deviceInfo: string = '', title: string = '', streamType: string = 'hidden'): Session {
     const now = new Date().toISOString();
     execute(
-        `INSERT INTO sessions (session_id, title, created_at, status, client_name, device_info, in_call, mic_in_use) VALUES (?, ?, ?, 'live', ?, ?, 0, 0)`,
-        [sessionId, title, now, clientName, deviceInfo]
+        `INSERT INTO sessions (session_id, title, created_at, status, client_name, device_info, in_call, mic_in_use, stream_type) VALUES (?, ?, ?, 'live', ?, ?, 0, 0, ?)`,
+        [sessionId, title, now, clientName, deviceInfo, streamType]
     );
     return getSession(sessionId)!;
 }
 
 export function getSession(sessionId: string): Session | undefined {
-    return queryOne('SELECT * FROM sessions WHERE session_id = ?', [sessionId]) as Session | undefined;
+    return queryOne<Session>('SELECT * FROM sessions WHERE session_id = ?', [sessionId]);
 }
 
-export function listSessions(limit: number = 100, offset: number = 0): Session[] {
-    return queryAll('SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]) as Session[];
+export function listSessions(limit: number = 100, offset: number = 0, streamType?: string): Session[] {
+    if (streamType) {
+        return queryAll<Session>('SELECT * FROM sessions WHERE stream_type = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', [streamType, limit, offset]);
+    }
+    return queryAll<Session>('SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
 }
 
-export function getActiveSessions(): Session[] {
-    return queryAll("SELECT * FROM sessions WHERE status = 'live' ORDER BY created_at DESC") as Session[];
+export function getActiveSessions(streamType?: string): Session[] {
+    if (streamType) {
+        return queryAll<Session>("SELECT * FROM sessions WHERE status = 'live' AND stream_type = ? ORDER BY created_at DESC", [streamType]);
+    }
+    return queryAll<Session>("SELECT * FROM sessions WHERE status = 'live' ORDER BY created_at DESC");
 }
 
 export function endSession(sessionId: string): boolean {
     const now = new Date().toISOString();
-    execute("UPDATE sessions SET status = 'ended', ended_at = ? WHERE session_id = ? AND status = 'live'", [now, sessionId]);
-    return getDb().getRowsModified() > 0;
+    const result = execute(
+        "UPDATE sessions SET status = 'ended', ended_at = ? WHERE session_id = ? AND status = 'live'",
+        [now, sessionId]
+    );
+    return result.changes > 0;
 }
 
 export function cleanupStaleSessions(timeoutSeconds: number = 60): string[] {
@@ -238,15 +226,18 @@ export function cleanupStaleSessions(timeoutSeconds: number = 60): string[] {
     return endedIds;
 }
 
-
 export function deleteSession(sessionId: string): boolean {
     execute('DELETE FROM chunks WHERE session_id = ?', [sessionId]);
     execute('DELETE FROM sessions WHERE session_id = ?', [sessionId]);
     return true;
 }
 
-export function getSessionCount(): number {
-    const row = queryOne('SELECT COUNT(*) as cnt FROM sessions');
+export function getSessionCount(streamType?: string): number {
+    if (streamType) {
+        const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM sessions WHERE stream_type = ?', [streamType]);
+        return row?.cnt ?? 0;
+    }
+    const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM sessions');
     return row?.cnt ?? 0;
 }
 
@@ -315,20 +306,20 @@ export function insertChunk(
 }
 
 export function getChunk(chunkId: string): Chunk | undefined {
-    return queryOne('SELECT * FROM chunks WHERE chunk_id = ?', [chunkId]) as Chunk | undefined;
+    return queryOne<Chunk>('SELECT * FROM chunks WHERE chunk_id = ?', [chunkId]);
 }
 
 export function chunkExists(sessionId: string, sequenceNum: number): boolean {
-    const row = queryOne('SELECT 1 as found FROM chunks WHERE session_id = ? AND sequence_num = ?', [sessionId, sequenceNum]);
+    const row = queryOne<{ found: number }>('SELECT 1 as found FROM chunks WHERE session_id = ? AND sequence_num = ?', [sessionId, sequenceNum]);
     return !!row;
 }
 
 export function getSessionChunks(sessionId: string): Chunk[] {
-    return queryAll('SELECT * FROM chunks WHERE session_id = ? ORDER BY sequence_num ASC', [sessionId]) as Chunk[];
+    return queryAll<Chunk>('SELECT * FROM chunks WHERE session_id = ? ORDER BY sequence_num ASC', [sessionId]);
 }
 
 export function getLatestChunkSequence(sessionId: string): number {
-    const row = queryOne('SELECT MAX(sequence_num) as max_seq FROM chunks WHERE session_id = ?', [sessionId]);
+    const row = queryOne<{ max_seq: number | null }>('SELECT MAX(sequence_num) as max_seq FROM chunks WHERE session_id = ?', [sessionId]);
     return row?.max_seq ?? -1;
 }
 
@@ -350,11 +341,25 @@ export interface Stats {
     total_size_human: string;
 }
 
-export function getStats(): Stats {
-    const sessions = queryOne('SELECT COUNT(*) as cnt FROM sessions');
-    const active = queryOne("SELECT COUNT(*) as cnt FROM sessions WHERE status = 'live'");
-    const chunks = queryOne('SELECT COUNT(*) as cnt, COALESCE(SUM(file_size), 0) as bytes FROM chunks');
-    const duration = queryOne('SELECT COALESCE(SUM(total_duration), 0) as dur FROM sessions');
+export function getStats(streamType?: string): Stats {
+    let sessionsSql = 'SELECT COUNT(*) as cnt FROM sessions';
+    let activeSql = "SELECT COUNT(*) as cnt FROM sessions WHERE status = 'live'";
+    let chunksSql = 'SELECT COUNT(*) as cnt, COALESCE(SUM(file_size), 0) as bytes FROM chunks';
+    let durationSql = 'SELECT COALESCE(SUM(total_duration), 0) as dur FROM sessions';
+    let params: any[] = [];
+
+    if (streamType) {
+        sessionsSql = 'SELECT COUNT(*) as cnt FROM sessions WHERE stream_type = ?';
+        activeSql = "SELECT COUNT(*) as cnt FROM sessions WHERE status = 'live' AND stream_type = ?";
+        chunksSql = 'SELECT COUNT(*) as cnt, COALESCE(SUM(c.file_size), 0) as bytes FROM chunks c JOIN sessions s ON c.session_id = s.session_id WHERE s.stream_type = ?';
+        durationSql = 'SELECT COALESCE(SUM(total_duration), 0) as dur FROM sessions WHERE stream_type = ?';
+        params = [streamType];
+    }
+
+    const sessions = queryOne<{ cnt: number }>(sessionsSql, params);
+    const active = queryOne<{ cnt: number }>(activeSql, params);
+    const chunks = queryOne<{ cnt: number; bytes: number }>(chunksSql, params);
+    const duration = queryOne<{ dur: number }>(durationSql, params);
 
     return {
         total_sessions: sessions?.cnt ?? 0,
@@ -389,10 +394,9 @@ function formatSize(bytes: number): string {
 
 export function closeDatabase(): void {
     if (db) {
-        saveToDisk();
         db.close();
-        clearInterval(saveInterval);
-        console.log('[database] Closed');
+        db = null;
+        console.log('[database] better-sqlite3 closed cleanly');
     }
 }
 
@@ -430,11 +434,11 @@ export function updateDeviceScreenshotSettings(clientId: string, autoScreenshot:
 }
 
 export function getDeviceCommand(clientId: string): DeviceCommand | undefined {
-    return queryOne('SELECT * FROM device_commands WHERE client_id = ?', [clientId]) as DeviceCommand | undefined;
+    return queryOne<DeviceCommand>('SELECT * FROM device_commands WHERE client_id = ?', [clientId]);
 }
 
 export function getAllDeviceCommands(): DeviceCommand[] {
-    return queryAll('SELECT * FROM device_commands ORDER BY updated_at DESC') as DeviceCommand[];
+    return queryAll<DeviceCommand>('SELECT * FROM device_commands ORDER BY updated_at DESC');
 }
 
 export function clearDeviceCommand(clientId: string): void {
@@ -458,6 +462,3 @@ export function updateDeviceSchedule(clientId: string, startTime: string, stopTi
         [clientId, startTime, stopTime, now]
     );
 }
-
-// Start auto-save when module loads
-startAutoSave();
