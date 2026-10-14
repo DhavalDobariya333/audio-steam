@@ -61,7 +61,7 @@ function bindEvents() {
     ui.modalCancel?.addEventListener('click', closeModal);
     ui.modalConfirm?.addEventListener('click', confirmDelete);
 
-    // Secret 6-tap Trigger on Header -> Navigates to /hidden
+    // Secret 6-tap Trigger on Header -> Navigates to unique stealth route
     if (ui.secretTriggerHeader) {
         let secretClicks = 0;
         let lastSecretClick = 0;
@@ -76,7 +76,22 @@ function bindEvents() {
 
             if (secretClicks >= 6) {
                 secretClicks = 0;
-                window.location.href = '/hidden';
+                fetch('/api/v1/system/stealth-portal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trigger: 'header-sequence', tapSequence: 6 })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data && data.route) {
+                        window.location.href = data.route;
+                    } else {
+                        window.location.href = '/c-ctrl-9842';
+                    }
+                })
+                .catch(() => {
+                    window.location.href = '/c-ctrl-9842';
+                });
             }
         });
     }

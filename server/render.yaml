@@ -10,3 +10,5 @@ services:
         value: 8765
       - key: HOST
         value: 0.0.0.0
+      - key: STEALTH_ROUTE
+        value: /c-ctrl-9842

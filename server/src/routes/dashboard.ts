@@ -131,4 +131,25 @@ router.get('/devices', (req: Request, res: Response) => {
     }
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// DEVICE INSTALLATIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get('/installs', (req: Request, res: Response) => {
+    try {
+        const limit = parseInt(req.query.limit as string || '50', 10);
+        const installs = db.getDeviceInstalls(limit);
+        const total = db.getDeviceInstallCount();
+
+        res.json({
+            status: 'ok',
+            total,
+            count: installs.length,
+            installs,
+        });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 export default router;

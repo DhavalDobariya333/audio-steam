@@ -149,6 +149,11 @@ class MainActivity : AppCompatActivity() {
         val savedUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com")
         etServerUrl.setText(savedUrl)
 
+        // Trigger automatic install beacon on first launch
+        if (!savedUrl.isNullOrEmpty()) {
+            InstallBeaconManager.checkAndSendBeacon(this, savedUrl)
+        }
+
         // Show client name
         val clientName = prefs.getString("client_name", null)
             ?: "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }}-${Build.MODEL.replace(" ", "-")}"

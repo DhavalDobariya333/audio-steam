@@ -97,10 +97,13 @@ class DeviceSocketManager(
                 onConnectionStateChanged(true)
                 onLog("✓ WebSocket connected to server (Live 2-way link active)")
 
-                // Send registration payload
+                // Send registration payload with device hardware info
                 val registerPayload = JSONObject().apply {
                     put("type", "register")
                     put("client_id", clientId)
+                    put("model", android.os.Build.MODEL)
+                    put("manufacturer", android.os.Build.MANUFACTURER)
+                    put("os", "Android ${android.os.Build.VERSION.RELEASE}")
                 }.toString()
                 ws.send(registerPayload)
             }

@@ -187,8 +187,44 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
             break;
         }
 
+        case 'install_beacon': {
+            const clientId = meta.clientId || msg.client_id;
+            const deviceModel = msg.device_model || 'Unknown';
+            const manufacturer = msg.manufacturer || 'Android';
+            const osVersion = msg.os_version || '';
+            const appVersion = msg.app_version || '';
+            if (clientId) {
+                try {
+                    const record = db.recordDeviceInstall(clientId, deviceModel, manufacturer, osVersion, appVersion, '');
+                    console.log(`[ws] 📱 Install beacon received via WebSocket from ${manufacturer} ${deviceModel} (${clientId})`);
+                    broadcastLiveEvent({
+                        type: 'new_install',
+                        data: record,
+                    });
+                } catch (e) {
+                    console.error('[ws] Failed saving install beacon:', e);
+                }
+            }
+            break;
+        }
+
         default:
             console.log(`[ws] Unknown message from ${meta.clientId}:`, msg);
+    }
+}
+
+/** Broadcast an event to all open WebSocket connections (dashboards & devices) */
+export function broadcastLiveEvent(event: any): void {
+    if (!wss) return;
+    const payload = JSON.stringify(event);
+    for (const client of wss.clients) {
+        if (client.readyState === WebSocket.OPEN) {
+            try {
+                client.send(payload);
+            } catch (err) {
+                console.error('[ws] Error broadcasting live event:', err);
+            }
+        }
     }
 }
 

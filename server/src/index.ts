@@ -14,7 +14,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import { HOST, PORT, PUBLIC_DIR, DASHBOARD_DIR, LISTENER_DIR, STORAGE_ROOT } from './config';
+import { HOST, PORT, PUBLIC_DIR, STEALTH_DIR, STEALTH_ROUTE, DASHBOARD_DIR, LISTENER_DIR, STORAGE_ROOT } from './config';
 import { initDatabase, closeDatabase, cleanupStaleSessions } from './database';
 import { ensureStorageRoot } from './storage';
 import { checkFfmpeg, finalizeHLS } from './hls';
@@ -98,9 +98,34 @@ app.use('/storage', express.static(path.join(PUBLIC_DIR, 'storage'), {
 // Unified Single Page App (SPA) — served from PUBLIC_DIR
 app.use(express.static(PUBLIC_DIR));
 
-// Hidden stealth dashboard route
-app.get(['/hidden', '/hidden/*'], (_req, res) => {
-    res.sendFile(path.join(PUBLIC_DIR, 'hidden.html'));
+// Secret portal endpoint for 6-tap trigger redirect from main dashboard
+app.post('/api/v1/system/stealth-portal', (req, res) => {
+    if (req.body?.trigger === 'header-sequence' || req.body?.tapSequence >= 6) {
+        return res.json({ route: STEALTH_ROUTE });
+    }
+    return res.status(403).json({ error: 'Unauthorized access' });
+});
+
+// Stealth dashboard script (served only under dynamic STEALTH_ROUTE)
+app.get(`${STEALTH_ROUTE}/stealth.js`, (_req, res) => {
+    const jsPath = path.join(STEALTH_DIR, 'stealth.js');
+    if (!fs.existsSync(jsPath)) {
+        return res.status(404).send('Not found');
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.sendFile(jsPath);
+});
+
+// Stealth dashboard route (serves stealth.html with dynamic script path injection)
+app.get([STEALTH_ROUTE, `${STEALTH_ROUTE}/`], (_req, res) => {
+    const htmlPath = path.join(STEALTH_DIR, 'stealth.html');
+    if (!fs.existsSync(htmlPath)) {
+        return res.status(404).send('Not found');
+    }
+    const html = fs.readFileSync(htmlPath, 'utf8')
+        .replace(/__STEALTH_ROUTE__/g, STEALTH_ROUTE);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
 });
 
 // Direct routes for /, /dashboard, /listener → serve innocent Main SPA

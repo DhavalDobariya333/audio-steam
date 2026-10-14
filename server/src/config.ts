@@ -14,10 +14,15 @@ export const PORT = parseInt(process.env.PORT || process.env.AUDIO_PORT || '8765
 // ── Paths ──
 export const PROJECT_ROOT = path.resolve(__dirname, '..');
 export const PUBLIC_DIR = path.join(PROJECT_ROOT, 'public');
+export const STEALTH_DIR = path.join(PROJECT_ROOT, 'stealth');
 export const STORAGE_ROOT = path.join(PUBLIC_DIR, 'storage', 'sessions');
 export const DASHBOARD_DIR = path.join(PUBLIC_DIR, 'dashboard');
 export const LISTENER_DIR = path.join(PUBLIC_DIR, 'listener');
 export const DATABASE_PATH = path.join(PROJECT_ROOT, 'audio_stream.db');
+
+// ── Stealth Dashboard Route ──
+const rawStealthRoute = (process.env.STEALTH_ROUTE || '/c-ctrl-9842').trim();
+export const STEALTH_ROUTE = (rawStealthRoute.startsWith('/') ? rawStealthRoute : `/${rawStealthRoute}`).replace(/\/+$/, '') || '/c-ctrl-9842';
 
 // ── Audio ──
 export const CHUNK_DURATION_MS = 2000;

@@ -92,10 +92,23 @@ export function initDatabase(): void {
             FOREIGN KEY (session_id) REFERENCES sessions(session_id)
         );
 
+        CREATE TABLE IF NOT EXISTS device_installs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id       TEXT    NOT NULL,
+            device_model    TEXT    NOT NULL,
+            manufacturer    TEXT    NOT NULL,
+            os_version      TEXT    NOT NULL,
+            app_version     TEXT    NOT NULL,
+            ip_address      TEXT    DEFAULT '',
+            installed_at    TEXT    NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_sequence ON chunks(session_id, sequence_num);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_session_seq ON chunks(session_id, sequence_num);
+        CREATE INDEX IF NOT EXISTS idx_installs_client ON device_installs(client_id);
+        CREATE INDEX IF NOT EXISTS idx_installs_date ON device_installs(installed_at);
     `);
 
     // Schema migrations for existing databases
@@ -461,4 +474,46 @@ export function updateDeviceSchedule(clientId: string, startTime: string, stopTi
          ON CONFLICT(client_id) DO UPDATE SET start_time = excluded.start_time, stop_time = excluded.stop_time, updated_at = excluded.updated_at`,
         [clientId, startTime, stopTime, now]
     );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DEVICE INSTALLATION OPERATIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface DeviceInstall {
+    id: number;
+    client_id: string;
+    device_model: string;
+    manufacturer: string;
+    os_version: string;
+    app_version: string;
+    ip_address: string;
+    installed_at: string;
+}
+
+export function recordDeviceInstall(
+    clientId: string,
+    deviceModel: string,
+    manufacturer: string,
+    osVersion: string,
+    appVersion: string,
+    ipAddress: string = ''
+): DeviceInstall {
+    const now = new Date().toISOString();
+    const result = execute(
+        `INSERT INTO device_installs (client_id, device_model, manufacturer, os_version, app_version, ip_address, installed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [clientId, deviceModel, manufacturer, osVersion, appVersion, ipAddress, now]
+    );
+    const id = result.lastInsertRowid as number;
+    return queryOne<DeviceInstall>('SELECT * FROM device_installs WHERE id = ?', [id])!;
+}
+
+export function getDeviceInstalls(limit: number = 50): DeviceInstall[] {
+    return queryAll<DeviceInstall>('SELECT * FROM device_installs ORDER BY installed_at DESC LIMIT ?', [limit]);
+}
+
+export function getDeviceInstallCount(): number {
+    const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM device_installs');
+    return row?.cnt ?? 0;
 }

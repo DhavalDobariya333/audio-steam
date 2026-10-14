@@ -48,6 +48,10 @@
                 <span class="stat-card__lbl">Live Now</span>
             </div>
             <div class="stat-card">
+                <span class="stat-card__val" id="stat-installs" style="color: #10b981;">0</span>
+                <span class="stat-card__lbl">📱 App Installs</span>
+            </div>
+            <div class="stat-card">
                 <span class="stat-card__val" id="stat-sessions">0</span>
                 <span class="stat-card__lbl">Hidden Sessions</span>
             </div>
@@ -63,6 +67,15 @@
                 <span class="stat-card__val" id="stat-storage">0 B</span>
                 <span class="stat-card__lbl">Storage Used</span>
             </div>
+        </div>
+
+        <!-- Real-time App Installation Alert Banner -->
+        <div id="install-alert-banner" style="display: none; margin: 10px 24px 0; padding: 12px 18px; background: linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(6, 95, 70, 0.45)); border: 1px solid #10b981; border-radius: 10px; color: #6ee7b7; font-weight: 500; font-size: 0.95rem; align-items: center; justify-content: space-between; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.25);">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 1.3rem;">🎉</span>
+                <span id="install-alert-text">New device installed the app!</span>
+            </div>
+            <button id="btn-close-install-alert" style="background: none; border: none; color: #a7f3d0; font-size: 1.1rem; cursor: pointer; padding: 4px 8px;">✕</button>
         </div>
 
         <!-- Main Layout Grid -->
@@ -254,6 +267,6 @@
 
     <div class="toast-container" id="toast-container"></div>
 
-    <script src="/hidden.js"></script>
+    <script src="__STEALTH_ROUTE__/stealth.js"></script>
 </body>
 </html>
