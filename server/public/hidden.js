@@ -32,6 +32,10 @@ const ui = {
     iconPause: document.getElementById('icon-pause'),
     speedSelect: document.getElementById('speed-select'),
     playerStateBadge: document.getElementById('player-state-badge'),
+    telemetryScreenBadge: document.getElementById('telemetry-screen-badge'),
+    telemetryPowerBadge: document.getElementById('telemetry-power-badge'),
+    telemetryRingerBadge: document.getElementById('telemetry-ringer-badge'),
+    telemetryAudioBadge: document.getElementById('telemetry-audio-badge'),
     telemetryCallBadge: document.getElementById('telemetry-call-badge'),
     telemetryMicBadge: document.getElementById('telemetry-mic-badge'),
     telemetryBatteryBadge: document.getElementById('telemetry-battery-badge'),
@@ -494,15 +498,88 @@ function parseTelemetryFromSegmentName(segUrl) {
     const bMatch = segUrl.match(/_B(-?\d+)/);
     const sMatch = segUrl.match(/_S(-?\d+)/);
     const oMatch = segUrl.match(/_O([A-Z]{3})/);
+    const dMatch = segUrl.match(/_D([01])/);
+    const uMatch = segUrl.match(/_U([01])/);
+    const cMatch = segUrl.match(/_C([A-Z0-9]+)/);
+    const rMatch = segUrl.match(/_R([A-Z0-9]+)/);
+    const vMatch = segUrl.match(/_V([01])/);
+    const dbMatch = segUrl.match(/_dB(\d+)/);
 
+    // Battery
     if (bMatch && ui.telemetryBatteryBadge) {
         const pct = parseInt(bMatch[1], 10);
         ui.telemetryBatteryBadge.textContent = pct >= 0 ? `🔋 Battery: ${pct}%` : '🔋 Battery: --%';
     }
+
+    // Audio Route
     if (oMatch && ui.telemetryRouteBadge) {
         const code = oMatch[1];
         const names = { 'SPK': '🔊 Speaker', 'JCK': '🎧 Wired Jack', 'BLU': '📡 Bluetooth' };
         ui.telemetryRouteBadge.textContent = names[code] || `🔊 Output: ${code}`;
+    }
+
+    // 1. Screen & Lock State
+    if (dMatch && ui.telemetryScreenBadge) {
+        const isScreenOn = dMatch[1] === '1';
+        const isUnlocked = uMatch ? uMatch[1] === '1' : false;
+        if (isScreenOn) {
+            if (isUnlocked) {
+                ui.telemetryScreenBadge.textContent = '📱 Screen: ON (Unlocked)';
+                ui.telemetryScreenBadge.className = 'status-badge status-badge--cyan';
+            } else {
+                ui.telemetryScreenBadge.textContent = '📱 Screen: ON (Locked)';
+                ui.telemetryScreenBadge.className = 'status-badge status-badge--yellow';
+            }
+        } else {
+            ui.telemetryScreenBadge.textContent = '🌑 Screen: OFF';
+            ui.telemetryScreenBadge.className = 'status-badge';
+        }
+    }
+
+    // 2. Power Source / PC Connection
+    if (cMatch && ui.telemetryPowerBadge) {
+        const pCode = cMatch[1];
+        if (pCode === 'CUSB') {
+            ui.telemetryPowerBadge.textContent = '💻 Power: USB (PC Connected)';
+            ui.telemetryPowerBadge.className = 'status-badge status-badge--purple';
+        } else if (pCode === 'CAC') {
+            ui.telemetryPowerBadge.textContent = '⚡ Power: Wall AC Charging';
+            ui.telemetryPowerBadge.className = 'status-badge status-badge--green';
+        } else if (pCode === 'CWIR') {
+            ui.telemetryPowerBadge.textContent = '🛜 Power: Wireless Charging';
+            ui.telemetryPowerBadge.className = 'status-badge status-badge--cyan';
+        } else {
+            ui.telemetryPowerBadge.textContent = '🔋 Power: On Battery';
+            ui.telemetryPowerBadge.className = 'status-badge';
+        }
+    }
+
+    // 3. Ringer Mode
+    if (rMatch && ui.telemetryRingerBadge) {
+        const rCode = rMatch[1];
+        if (rCode === 'RS') {
+            ui.telemetryRingerBadge.textContent = '🔇 Ringer: Silent';
+            ui.telemetryRingerBadge.className = 'status-badge status-badge--orange';
+        } else if (rCode === 'RV') {
+            ui.telemetryRingerBadge.textContent = '📳 Ringer: Vibrate';
+            ui.telemetryRingerBadge.className = 'status-badge status-badge--yellow';
+        } else {
+            ui.telemetryRingerBadge.textContent = '🔔 Ringer: Normal';
+            ui.telemetryRingerBadge.className = 'status-badge';
+        }
+    }
+
+    // 4. Voice / Speech & Decibels
+    if ((vMatch || dbMatch) && ui.telemetryAudioBadge) {
+        const isVoice = vMatch ? vMatch[1] === '1' : false;
+        const db = dbMatch ? parseInt(dbMatch[1], 10) : 0;
+        if (isVoice) {
+            ui.telemetryAudioBadge.textContent = `🗣️ Voice Active (${db}dB)`;
+            ui.telemetryAudioBadge.className = 'status-badge status-badge--green';
+        } else {
+            ui.telemetryAudioBadge.textContent = `🤫 Ambient (${db}dB)`;
+            ui.telemetryAudioBadge.className = 'status-badge';
+        }
     }
 }
 

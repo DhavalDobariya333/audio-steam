@@ -548,6 +548,36 @@ body {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+.status-badge--cyan {
+    background: rgba(6, 182, 212, 0.15);
+    border-color: rgba(6, 182, 212, 0.4);
+    color: #22d3ee;
+}
+
+.status-badge--yellow {
+    background: rgba(234, 179, 8, 0.15);
+    border-color: rgba(234, 179, 8, 0.4);
+    color: #facc15;
+}
+
+.status-badge--purple {
+    background: rgba(168, 85, 247, 0.15);
+    border-color: rgba(168, 85, 247, 0.4);
+    color: #c084fc;
+}
+
+.status-badge--green {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: #34d399;
+}
+
+.status-badge--orange {
+    background: rgba(249, 115, 22, 0.15);
+    border-color: rgba(249, 115, 22, 0.4);
+    color: #fb923c;
+}
+
 /* ── Remote Device Controller ── */
 .section-card--remote {
     border-top: 2px solid rgba(124, 92, 252, 0.4);

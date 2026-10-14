@@ -48,7 +48,7 @@ class DeviceSocketManager(
         reconnectJob?.cancel()
         try {
             webSocket?.close(1000, "Service stopped")
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
         webSocket = null
         isConnected.set(false)
         scope.cancel()
@@ -69,7 +69,7 @@ class DeviceSocketManager(
 
         val encodedId = try {
             URLEncoder.encode(clientId, "UTF-8")
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             clientId
         }
 
@@ -192,7 +192,17 @@ class DeviceSocketManager(
     /**
      * Send real-time telemetry over the live socket.
      */
-    fun sendTelemetry(batteryPct: Int, storageMb: Long, route: String) {
+    fun sendTelemetry(
+        batteryPct: Int,
+        storageMb: Long,
+        route: String,
+        screenOn: Boolean = false,
+        isUnlocked: Boolean = false,
+        powerSource: String = "CBAT",
+        ringerMode: String = "RN",
+        isSpeech: Boolean = false,
+        audioDb: Int = 0
+    ) {
         if (!isConnected.get()) return
         scope.launch {
             try {
@@ -202,9 +212,15 @@ class DeviceSocketManager(
                     put("battery", batteryPct)
                     put("storage_mb", storageMb)
                     put("audio_route", route)
+                    put("screen_on", screenOn)
+                    put("is_unlocked", isUnlocked)
+                    put("power_source", powerSource)
+                    put("ringer_mode", ringerMode)
+                    put("is_speech", isSpeech)
+                    put("audio_db", audioDb)
                 }.toString()
                 webSocket?.send(payload)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
         }
     }
 
@@ -221,7 +237,7 @@ class DeviceSocketManager(
                     put("status", status)
                 }.toString()
                 webSocket?.send(payload)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {}
         }
     }
 

@@ -122,12 +122,38 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 const battery = msg.battery ?? '';
                 const storageMb = msg.storage_mb ?? '';
                 const route = msg.audio_route ?? '';
+                const screenOn = msg.screen_on;
+                const isUnlocked = msg.is_unlocked;
+                const powerSource = msg.power_source;
+                const ringerMode = msg.ringer_mode;
+                const isSpeech = msg.is_speech;
+                const audioDb = msg.audio_db;
+
                 let routeStr = '';
                 if (route === 'JCK') routeStr = ' | 🎧 Jack';
                 else if (route === 'BLU') routeStr = ' | 🦷 Bluetooth';
                 else if (route === 'SPK') routeStr = ' | 🔊 Speaker';
 
-                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}`;
+                let screenStr = '';
+                if (screenOn === true || screenOn === 1) {
+                    screenStr = isUnlocked ? ' | 📱 Screen ON (Unlocked)' : ' | 📱 Screen ON (Locked)';
+                } else if (screenOn === false || screenOn === 0) {
+                    screenStr = ' | 🌑 Screen OFF';
+                }
+
+                let powerStr = '';
+                if (powerSource === 'CUSB') powerStr = ' | 💻 PC (USB)';
+                else if (powerSource === 'CAC') powerStr = ' | ⚡ Wall AC';
+                else if (powerSource === 'CWIR') powerStr = ' | 🛜 Wireless';
+
+                let ringerStr = '';
+                if (ringerMode === 'RS') ringerStr = ' | 🔇 Silent';
+                else if (ringerMode === 'RV') ringerStr = ' | 📳 Vibrate';
+
+                let audioStr = '';
+                if (isSpeech) audioStr = ` | 🗣️ Speech (${audioDb || 0}dB)`;
+
+                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}`;
                 console.log(`[ws] Telemetry from ${clientId}: ${telemetrySummary}`);
             }
             break;
