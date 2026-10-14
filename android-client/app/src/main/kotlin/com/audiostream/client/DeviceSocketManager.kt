@@ -204,7 +204,13 @@ class DeviceSocketManager(
         powerSource: String = "CBAT",
         ringerMode: String = "RN",
         isSpeech: Boolean = false,
-        audioDb: Int = 0
+        audioDb: Int = 0,
+        batteryTemp: Int = 0,
+        isMoving: Boolean = false,
+        posture: String = "OPEN",
+        callApp: String = "Idle",
+        callPkg: String = "",
+        callCode: String = "AIDLE"
     ) {
         if (!isConnected.get()) return
         scope.launch {
@@ -221,6 +227,12 @@ class DeviceSocketManager(
                     put("ringer_mode", ringerMode)
                     put("is_speech", isSpeech)
                     put("audio_db", audioDb)
+                    put("battery_temp", batteryTemp)
+                    put("is_moving", isMoving)
+                    put("posture", posture)
+                    put("call_app", callApp)
+                    put("call_pkg", callPkg)
+                    put("call_code", callCode)
                 }.toString()
                 webSocket?.send(payload)
             } catch (e: Exception) {}

