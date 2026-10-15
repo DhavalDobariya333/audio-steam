@@ -32,6 +32,7 @@ const ui = {
     iconPause: document.getElementById('icon-pause'),
     speedSelect: document.getElementById('speed-select'),
     playerStateBadge: document.getElementById('player-state-badge'),
+    telemetryActiveAppBadge: document.getElementById('telemetry-activeapp-badge'),
     telemetryCallAppBadge: document.getElementById('telemetry-callapp-badge'),
     telemetryPostureBadge: document.getElementById('telemetry-posture-badge'),
     telemetryTempBadge: document.getElementById('telemetry-temp-badge'),
@@ -769,6 +770,18 @@ function handleLiveTelemetryMessage(msg) {
         } else {
             ui.telemetryRingerBadge.textContent = '🔔 Ringer: Normal';
             ui.telemetryRingerBadge.className = 'status-badge';
+        }
+    }
+    if (ui.telemetryActiveAppBadge) {
+        if (msg.screenOn && msg.callPkg) {
+            ui.telemetryActiveAppBadge.textContent = `📱 Using: ${msg.callPkg}`;
+            ui.telemetryActiveAppBadge.className = 'status-badge status-badge--cyan';
+        } else if (!msg.screenOn) {
+            ui.telemetryActiveAppBadge.textContent = '🌑 Screen OFF';
+            ui.telemetryActiveAppBadge.className = 'status-badge';
+        } else {
+            ui.telemetryActiveAppBadge.textContent = '📱 Using: Home / Idle';
+            ui.telemetryActiveAppBadge.className = 'status-badge';
         }
     }
     if (ui.telemetryCallAppBadge) {

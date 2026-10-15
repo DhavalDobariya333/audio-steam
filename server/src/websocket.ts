@@ -163,8 +163,9 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 let motionStr = isMoving ? ' | 🏃 Moving' : ' | 🪑 Still';
                 let postureStr = posture === 'POCK' ? ' | 👖 Pocket' : (posture === 'DESK' ? ' | 🪵 Desk' : (posture === 'OPEN' ? ' | ✋ Hand' : ''));
                 let callStr = (callCode && callCode !== 'AIDLE') ? ` | 📞 ${callApp || 'Call'} (${callCode})` : '';
+                let activeStr = (callPkg && (screenOn === true || screenOn === 1)) ? ` | 📱 Using: ${callPkg}` : '';
 
-                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${callStr}`;
+                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${callStr}${activeStr}`;
                 console.log(`[ws] Telemetry from ${clientId}: ${telemetrySummary}`);
 
                 // Broadcast live telemetry to connected dashboards (e.g. hidden/stealth view)

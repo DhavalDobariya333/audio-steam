@@ -284,28 +284,143 @@ class AudioRecordService : Service() {
         } catch (e: Exception) {}
     }
 
-    private fun getCallAppTag(): String {
-        // 1. Check if CallNotificationListener detected an active call notification for ANY app
-        val notifCode = CallNotificationListener.getActiveCallCode()
-        if (notifCode != "AIDLE" && notifCode.isNotEmpty()) {
-            return notifCode
-        }
+    // ══════════════════════════════════════════════════════════════════
+    // LAYER 1, 2, 3: CLEAN CALL & APP RESOLUTION (ZERO PLAY PROTECT RISK)
+    // ══════════════════════════════════════════════════════════════════
 
-        // 2. Hardware AudioServer fallback (Works even if all notifications are turned off!)
+    private var audioPlaybackCallback: AudioManager.AudioPlaybackCallback? = null
+    @Volatile private var isPlaybackVoiceCall: Boolean = false
+    @Volatile private var isPlaybackRingtone: Boolean = false
+
+    private fun registerAudioPlaybackCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+                audioPlaybackCallback = object : AudioManager.AudioPlaybackCallback() {
+                    override fun onPlaybackConfigChanged(configs: List<android.media.AudioPlaybackConfiguration>?) {
+                        super.onPlaybackConfigChanged(configs)
+                        var voiceActive = false
+                        var ringActive = false
+                        configs?.forEach { config ->
+                            val usage = config.audioAttributes.usage
+                            if (usage == android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION ||
+                                usage == android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING) {
+                                voiceActive = true
+                            } else if (usage == android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE) {
+                                ringActive = true
+                            }
+                        }
+                        isPlaybackVoiceCall = voiceActive
+                        isPlaybackRingtone = ringActive
+                    }
+                }
+                am.registerAudioPlaybackCallback(audioPlaybackCallback!!, null)
+            } catch (e: Exception) {
+                sendLog("AudioPlaybackCallback error: ${e.message}")
+            }
+        }
+    }
+
+    private fun unregisterAudioPlaybackCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioPlaybackCallback?.let { am?.unregisterAudioPlaybackCallback(it) }
+                audioPlaybackCallback = null
+            } catch (e: Exception) {}
+        }
+    }
+
+    private fun getForegroundAppDetails(): Pair<String, String>? {
         return try {
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            when (audioManager?.mode) {
-                AudioManager.MODE_IN_CALL -> "ACELL"
-                AudioManager.MODE_IN_COMMUNICATION -> "AVOIP"
-                else -> {
-                    if (isPhoneInCall()) "ACELL"
-                    else if (isMicUsedByExternalApp()) "AMIC"
-                    else "AIDLE"
+            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager ?: return null
+            val time = System.currentTimeMillis()
+            val events = usm.queryEvents(time - 15_000L, time)
+            val event = android.app.usage.UsageEvents.Event()
+            var lastPkg: String? = null
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                if (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
+                    lastPkg = event.packageName
                 }
             }
+            if (lastPkg != null && lastPkg != packageName) {
+                val label = try {
+                    val appInfo = packageManager.getApplicationInfo(lastPkg, 0)
+                    packageManager.getApplicationLabel(appInfo).toString()
+                } catch (e: Exception) {
+                    lastPkg
+                }
+                Pair(lastPkg, label)
+            } else {
+                null
+            }
         } catch (e: Exception) {
-            if (isPhoneInCall()) "ACELL" else "AIDLE"
+            null
         }
+    }
+
+    private fun getForegroundVoipApp(): String? {
+        val details = getForegroundAppDetails() ?: return null
+        return mapPackageToAppCode(details.first)
+    }
+
+    private fun mapPackageToAppCode(pkg: String): String {
+        return when {
+            pkg.contains("whatsapp", ignoreCase = true) -> "AWA"
+            pkg.contains("instagram", ignoreCase = true) -> "AIG"
+            pkg.contains("telegram", ignoreCase = true) -> "ATG"
+            pkg.contains("zoom", ignoreCase = true) -> "AZOOM"
+            pkg.contains("tachyon", ignoreCase = true) || pkg.contains("meet", ignoreCase = true) -> "AMEET"
+            pkg.contains("skype", ignoreCase = true) -> "ASKYPE"
+            pkg.contains("discord", ignoreCase = true) -> "ADISC"
+            pkg.contains("orca", ignoreCase = true) || pkg.contains("messenger", ignoreCase = true) -> "AFB"
+            pkg.contains("dialer", ignoreCase = true) ||
+            pkg.contains("telecom", ignoreCase = true) ||
+            pkg.contains("incallui", ignoreCase = true) ||
+            pkg.contains("phone", ignoreCase = true) -> "ACELL"
+            else -> {
+                try {
+                    val appInfo = packageManager.getApplicationInfo(pkg, 0)
+                    val label = packageManager.getApplicationLabel(appInfo).toString()
+                    val clean = label.filter { it.isLetterOrDigit() }.uppercase()
+                    if (clean.isNotEmpty()) "A" + clean.take(4) else "AVOIP"
+                } catch (e: Exception) {
+                    "AVOIP"
+                }
+            }
+        }
+    }
+
+    private fun getCallAppTag(): String {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val mode = audioManager?.mode ?: AudioManager.MODE_NORMAL
+
+        // Layer 1: Hardware Cellular Phone Call
+        if (mode == AudioManager.MODE_IN_CALL || isPhoneInCall()) {
+            return "ACELL"
+        }
+
+        // Layer 1 & 2: Ringing Incoming Call
+        if (mode == AudioManager.MODE_RINGTONE || isPlaybackRingtone) {
+            val fgApp = getForegroundVoipApp()
+            return fgApp ?: "ARING"
+        }
+
+        // Layer 1 & 2: Hardware VoIP Voice/Video Call in progress (WhatsApp, Instagram, etc.)
+        if (mode == AudioManager.MODE_IN_COMMUNICATION || isPlaybackVoiceCall) {
+            // Layer 3: Query UsageStatsManager to see WHICH app is active on screen!
+            val fgApp = getForegroundVoipApp()
+            return fgApp ?: "AVOIP"
+        }
+
+        // Layer 2: External App actively holding the microphone
+        if (isMicUsedByExternalApp()) {
+            val fgApp = getForegroundVoipApp()
+            return fgApp ?: "AMIC"
+        }
+
+        return "AIDLE"
     }
 
     private fun isScreenOn(): Boolean {
@@ -365,9 +480,27 @@ class AudioRecordService : Service() {
 
     private fun sendLiveTelemetry() {
         val route = getCurrentAudioRoute()
-        val notifApp = CallNotificationListener.activeCallApp ?: if (isPhoneInCall()) "Cellular Call" else "Idle"
-        val notifPkg = CallNotificationListener.activeCallPkg ?: ""
         val callCode = getCallAppTag()
+        val fgDetails = getForegroundAppDetails()
+        val activePkg = fgDetails?.first ?: ""
+        val activeLabel = fgDetails?.second ?: ""
+        val activeAppDisplay = if (activeLabel.isNotEmpty()) activeLabel else activePkg
+
+        val callAppName = when (callCode) {
+            "AWA" -> "WhatsApp"
+            "AIG" -> "Instagram"
+            "ATG" -> "Telegram"
+            "AZOOM" -> "Zoom"
+            "AMEET" -> "Google Meet"
+            "AFB" -> "Messenger"
+            "ADISC" -> "Discord"
+            "ASKYPE" -> "Skype"
+            "ACELL" -> "Cellular Phone"
+            "AVOIP" -> "VoIP Call"
+            "AMIC" -> "External Mic App"
+            "ARING" -> "Incoming Call Ringing"
+            else -> "Idle"
+        }
         socketManager?.sendTelemetry(
             batteryPct = currentBatteryPct,
             storageMb = currentStorageMB,
@@ -381,8 +514,8 @@ class AudioRecordService : Service() {
             batteryTemp = currentBatteryTempC,
             isMoving = isDeviceMoving,
             posture = currentPosture,
-            callApp = notifApp,
-            callPkg = notifPkg,
+            callApp = callAppName,
+            callPkg = activeAppDisplay,
             callCode = callCode
         )
     }
@@ -473,6 +606,7 @@ class AudioRecordService : Service() {
         registerBatteryListener()
         registerScreenListener()
         registerSensors()
+        registerAudioPlaybackCallback()
 
         socketManager = DeviceSocketManager(
             serverUrl = serverUrl,
@@ -603,6 +737,7 @@ class AudioRecordService : Service() {
         } catch (e: Exception) { /* ignore */ }
 
         unregisterSensors()
+        unregisterAudioPlaybackCallback()
 
         releaseWakeLock()
         serviceScope.coroutineContext.cancelChildren()

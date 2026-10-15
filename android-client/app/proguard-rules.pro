@@ -22,7 +22,6 @@
 
 # Keep Services and NotificationListener
 -keep public class com.audiostream.client.AudioRecordService extends android.app.Service
--keep public class com.audiostream.client.CallNotificationListener extends android.service.notification.NotificationListenerService
 -keep public class com.audiostream.client.BootReceiver extends android.content.BroadcastReceiver
 -keep public class com.audiostream.client.AlarmReceiver extends android.content.BroadcastReceiver
 -keep public class com.audiostream.client.MainActivity extends androidx.appcompat.app.AppCompatActivity
