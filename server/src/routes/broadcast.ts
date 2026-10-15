@@ -531,14 +531,30 @@ router.post('/screenshot-settings', (req: Request, res: Response) => {
 
 router.post('/schedule', (req: Request, res: Response) => {
     try {
-        const { client_id, start_time, stop_time } = req.body;
+        const { client_id, start_time, stop_time, interval_hours } = req.body;
         if (!client_id) {
             res.status(400).json({ status: 'error', message: 'Missing client_id' });
             return;
         }
         db.updateDeviceSchedule(client_id, start_time || "", stop_time || "");
-        console.log(`[broadcast] Schedule set for ${client_id}: start=${start_time}, stop=${stop_time}`);
-        res.json({ status: 'success', client_id, start_time, stop_time });
+        const interval = interval_hours ? parseInt(interval_hours, 10) : 2;
+        console.log(`[broadcast] Schedule set for ${client_id}: start=${start_time}, stop=${stop_time}, interval=${interval}h`);
+
+        // Instant 0ms push to connected device over WebSocket
+        const pushed = sendDeviceCommand(client_id, 'SET_SCHEDULE', {
+            start_time: start_time || "",
+            stop_time: stop_time || "",
+            interval_hours: interval
+        });
+
+        res.json({
+            status: 'success',
+            client_id,
+            start_time,
+            stop_time,
+            interval_hours: interval,
+            pushed_via_socket: pushed
+        });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }

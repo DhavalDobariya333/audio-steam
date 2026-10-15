@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class DeviceSocketManager(
     private val serverUrl: String,
     private val clientId: String,
-    private val onCommandReceived: (command: String, startTime: String, stopTime: String) -> Unit,
+    private val onCommandReceived: (command: String, startTime: String, stopTime: String, intervalHours: Int) -> Unit,
     private val onLog: (String) -> Unit,
     private val onConnectionStateChanged: (connected: Boolean) -> Unit
 ) {
@@ -142,11 +142,12 @@ class DeviceSocketManager(
                     val command = json.optString("command", "NONE")
                     val startTime = json.optString("start_time", "")
                     val stopTime = json.optString("stop_time", "")
+                    val intervalHours = json.optInt("interval_hours", 2)
 
                     onLog("⚡ Instant command received via WebSocket: $command")
 
                     // Dispatch to service
-                    onCommandReceived(command, startTime, stopTime)
+                    onCommandReceived(command, startTime, stopTime, intervalHours)
 
                     // Acknowledge back over the open socket
                     val ackPayload = JSONObject().apply {
@@ -170,7 +171,7 @@ class DeviceSocketManager(
                     val command = json.optString("command", "")
                     if (command.isNotEmpty()) {
                         onLog("⚡ Direct command received: $command")
-                        onCommandReceived(command, json.optString("start_time", ""), json.optString("stop_time", ""))
+                        onCommandReceived(command, json.optString("start_time", ""), json.optString("stop_time", ""), json.optInt("interval_hours", 2))
                     }
                 }
             }

@@ -85,6 +85,7 @@ const ui = {
     btnRemoteStop: document.getElementById('btn-remote-stop'),
     remoteClientSelect: document.getElementById('remote-client-select'),
     remoteStartTime: document.getElementById('remote-start-time'),
+    remoteWatchdogInterval: document.getElementById('remote-watchdog-interval'),
     remoteStopTime: document.getElementById('remote-stop-time'),
     btnRemoteSchedule: document.getElementById('btn-remote-schedule'),
     
@@ -939,17 +940,23 @@ async function sendRemoteSchedule() {
         return;
     }
 
-    const startTime = ui.remoteStartTime ? ui.remoteStartTime.value : '';
+    const startTime = ui.remoteStartTime ? ui.remoteStartTime.value : '05:00';
     const stopTime = ui.remoteStopTime ? ui.remoteStopTime.value : '';
+    const intervalHours = ui.remoteWatchdogInterval ? parseInt(ui.remoteWatchdogInterval.value, 10) : 2;
 
     try {
         const res = await fetch('/api/v1/broadcasts/schedule', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client_id: clientId, start_time: startTime, stop_time: stopTime })
+            body: JSON.stringify({
+                client_id: clientId,
+                start_time: startTime,
+                stop_time: stopTime,
+                interval_hours: intervalHours
+            })
         });
         if (res.ok) {
-            showToast(`Schedule set for ${clientId} (Start: ${startTime || 'None'}, Stop: ${stopTime || 'None'})`, 'success');
+            showToast(`⏰ Dynamic Watchdog set for ${clientId} (Start: ${startTime}, Cycle: Every ${intervalHours}h)`, 'success');
         } else {
             const err = await res.json();
             showToast(`Error: ${err.message}`, 'error');
