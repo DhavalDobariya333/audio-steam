@@ -36,6 +36,7 @@ const basicAuth = (req: express.Request, res: express.Response, next: express.Ne
         req.path.startsWith('/api/v1/broadcasts') || 
         req.path === '/api/v1/listen/active' ||
         req.path.startsWith('/api/v1/health') ||
+        req.path === '/up' ||
         req.path.startsWith('/storage') ||
         req.path.startsWith('/ws')
     ) {
@@ -74,6 +75,10 @@ app.get('/api/v1/health', (_req, res) => {
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
     });
+});
+
+app.get('/up', (_req, res) => {
+    res.type('text/plain').send('up and running');
 });
 
 // ── Static File Serving ──
