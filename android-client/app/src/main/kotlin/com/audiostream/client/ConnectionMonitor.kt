@@ -48,9 +48,11 @@ class ConnectionMonitor(
     private val onLog: (String) -> Unit
 ) {
     companion object {
-        private const val HEARTBEAT_INTERVAL_MS = 30_000L  // 30 seconds
+        private const val HEARTBEAT_INTERVAL_MS = 60_000L  // Relaxed to 60s
         private const val HEALTH_TIMEOUT_MS = 10_000L      // 10 second timeout
     }
+
+    private val heartbeatExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     // Current state
     private val currentState = AtomicReference(ConnectionState.IDLE)
@@ -197,9 +199,9 @@ class ConnectionMonitor(
     // ══════════════════════════════════════════════════════════════════════
 
     private fun checkServerAsync() {
-        Thread {
+        heartbeatExecutor.execute {
             checkServer()
-        }.start()
+        }
     }
 
     /**
@@ -256,9 +258,12 @@ class ConnectionMonitor(
         heartbeatRunnable = object : Runnable {
             override fun run() {
                 if (!isMonitoring) return
-                Thread {
-                    checkServer()
-                }.start()
+                // Only send HTTP health ping if currently disconnected/reconnecting
+                if (currentState.get() != ConnectionState.CONNECTED) {
+                    heartbeatExecutor.execute {
+                        checkServer()
+                    }
+                }
                 handler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
             }
         }

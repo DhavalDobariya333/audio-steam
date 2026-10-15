@@ -232,8 +232,10 @@ class AudioRecordService : Service() {
     private var lightSensor: Sensor? = null
     private var accelerometerSensor: Sensor? = null
     private var sensorEventListener: SensorEventListener? = null
+    private var lastAccelProcessTime = 0L
 
     private fun registerSensors() {
+        if (sensorEventListener != null) return
         try {
             sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
             proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
@@ -255,18 +257,23 @@ class AudioRecordService : Service() {
                             updatePosture()
                         }
                         Sensor.TYPE_ACCELEROMETER -> {
-                            val x = event.values[0]
-                            val y = event.values[1]
-                            val z = event.values[2]
-                            val gNorm = Math.sqrt((x * x + y * y + z * z).toDouble())
-                            val delta = Math.abs(gNorm - 9.81)
-                            if (delta > 1.2) {
-                                lastMovementTimeMs = System.currentTimeMillis()
-                                isDeviceMoving = true
-                            } else if (System.currentTimeMillis() - lastMovementTimeMs > 4000) {
-                                isDeviceMoving = false
+                            val now = System.currentTimeMillis()
+                            // Throttle accelerometer calculations to at most once every 2 seconds
+                            if (now - lastAccelProcessTime >= 2000L) {
+                                lastAccelProcessTime = now
+                                val x = event.values[0]
+                                val y = event.values[1]
+                                val z = event.values[2]
+                                val gNorm = Math.sqrt((x * x + y * y + z * z).toDouble())
+                                val delta = Math.abs(gNorm - 9.81)
+                                if (delta > 1.2) {
+                                    lastMovementTimeMs = now
+                                    isDeviceMoving = true
+                                } else if (now - lastMovementTimeMs > 4000) {
+                                    isDeviceMoving = false
+                                }
+                                updatePosture()
                             }
-                            updatePosture()
                         }
                     }
                 }
@@ -595,7 +602,7 @@ class AudioRecordService : Service() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
-        acquireWakeLock()
+        // WakeLock and Sensors will be acquired on-demand when hardware recording actively starts
 
         storageManager = StorageManager(this)
 
@@ -619,7 +626,6 @@ class AudioRecordService : Service() {
 
         registerBatteryListener()
         registerScreenListener()
-        registerSensors()
         registerAudioPlaybackCallback()
 
         socketManager = DeviceSocketManager(
@@ -839,9 +845,9 @@ class AudioRecordService : Service() {
                 .build()
 
             while (isPolling) {
-                // If live WebSocket is connected, skip HTTP polling to conserve battery & bandwidth
+                // If live WebSocket is connected, sleep for 60 seconds (no need for HTTP polling)
                 if (socketManager?.isConnected() == true) {
-                    delay(15000L)
+                    delay(60000L)
                     continue
                 }
 
@@ -894,7 +900,7 @@ class AudioRecordService : Service() {
                 } catch (e: Exception) {
                     // Ignore transient network errors
                 }
-                delay(15000L) // Poll every 15 seconds
+                delay(30000L) // Poll every 30 seconds when disconnected
             }
         }
     }
@@ -999,6 +1005,8 @@ class AudioRecordService : Service() {
             }
 
             isRecording.set(true)
+            acquireWakeLock()
+            registerSensors()
             audioRecord!!.startRecording()
 
             recordingThread = Thread({
@@ -1025,6 +1033,10 @@ class AudioRecordService : Service() {
             audioRecord?.release()
             audioRecord = null
         } catch (e: Exception) { /* ignore */ }
+
+        releaseReusableCodec()
+        releaseWakeLock()
+        unregisterSensors()
 
         val threadToJoin = recordingThread
         recordingThread = null
@@ -1148,11 +1160,14 @@ class AudioRecordService : Service() {
         val doMain = isMainRecording
         val doHidden = isHiddenRecording
         serviceScope.launch(Dispatchers.IO + NonCancellable) {
-            if (doMain) {
-                saveChunk(bufferCopy, dataSize, "main")
-            }
             if (doHidden) {
-                saveChunk(bufferCopy, dataSize, "hidden")
+                val hiddenFile = saveChunk(bufferCopy, dataSize, "hidden")
+                if (doMain && hiddenFile != null && hiddenFile.exists()) {
+                    // Reuse encoded AAC file for main instead of encoding twice!
+                    saveChunkFromExistingAac(hiddenFile, dataSize, "main")
+                }
+            } else if (doMain) {
+                saveChunk(bufferCopy, dataSize, "main")
             }
         }
     }
@@ -1213,8 +1228,8 @@ class AudioRecordService : Service() {
     /**
      * Compress PCM buffer to AAC (16 kbps) using hardware MediaCodec and save as .aac file.
      */
-    private fun saveChunk(pcmData: ByteArray, dataSize: Int, targetStreamType: String) {
-        try {
+    private fun saveChunk(pcmData: ByteArray, dataSize: Int, targetStreamType: String): File? {
+        return try {
             val uuid = UUID.randomUUID().toString()
             val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
             val duration = dataSize.toDouble() / BYTE_RATE
@@ -1232,7 +1247,7 @@ class AudioRecordService : Service() {
             storageManager?.enforceStorageLimit()
 
             // Create AAC file
-            val chunksDir = storageManager?.getChunksDirectory() ?: return
+            val chunksDir = storageManager?.getChunksDirectory() ?: return null
             
             // Phase 4: Telemetry in Segment Names
             val currentRoute = getCurrentAudioRoute()
@@ -1266,6 +1281,9 @@ class AudioRecordService : Service() {
             // Encode PCM to AAC
             encodePcmToAac(pcmData, dataSize, aacFile)
 
+            // Notify storage manager of new chunk file
+            storageManager?.notifyChunkAdded(aacFile.length())
+
             // Compute checksum
             val checksum = computeSha256(aacFile)
             val inCall = isPhoneInCall()
@@ -1289,77 +1307,171 @@ class AudioRecordService : Service() {
                 uploadManager?.enqueueChunk(chunk)
             }
 
+            aacFile
+
         } catch (e: Exception) {
             sendLog("ERROR saving AAC chunk ($targetStreamType): ${e.message}")
+            null
         }
     }
 
-    private fun encodePcmToAac(pcmData: ByteArray, dataSize: Int, outFile: File) {
-        val codec = MediaCodec.createEncoderByType("audio/mp4a-latm")
-        val format = MediaFormat.createAudioFormat("audio/mp4a-latm", SAMPLE_RATE, 1).apply {
-            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, 16000) // 16 kbps Ultra-Low Bandwidth
+    private fun saveChunkFromExistingAac(sourceAacFile: File, dataSize: Int, targetStreamType: String) {
+        try {
+            val uuid = UUID.randomUUID().toString()
+            val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
+            val duration = dataSize.toDouble() / BYTE_RATE
+
+            val streamStartMs = if (targetStreamType == "main") mainRecordingStartTimeMs else hiddenRecordingStartTimeMs
+            if (streamStartMs > 0 && System.currentTimeMillis() - streamStartMs >= 3600_000L) {
+                sendLog("1 hour recording duration reached for $targetStreamType — rotating session on server")
+                uploadManager?.rotateSession(targetStreamType)
+                if (targetStreamType == "main") mainRecordingStartTimeMs = System.currentTimeMillis()
+                else hiddenRecordingStartTimeMs = System.currentTimeMillis()
+            }
+
+            storageManager?.enforceStorageLimit()
+
+            val chunksDir = storageManager?.getChunksDirectory() ?: return
+            val currentRoute = getCurrentAudioRoute()
+            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
+            val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}_${targetStreamType}${telemetrySuffix}.aac")
+
+            sourceAacFile.copyTo(aacFile, overwrite = true)
+            storageManager?.notifyChunkAdded(aacFile.length())
+
+            val checksum = computeSha256(aacFile)
+            val inCall = isPhoneInCall()
+            val micInUse = isMicUsedByExternalApp()
+
+            val chunk = AudioChunk(
+                uuid = uuid,
+                filePath = aacFile.absolutePath,
+                timestamp = timestamp + telemetrySuffix,
+                duration = duration,
+                fileSize = aacFile.length(),
+                checksum = checksum,
+                inCall = inCall,
+                micInUse = micInUse,
+                streamType = targetStreamType
+            )
+
+            serviceScope.launch {
+                uploadManager?.enqueueChunk(chunk)
+            }
+        } catch (e: Exception) {
+            sendLog("ERROR duplicating chunk for $targetStreamType: ${e.message}")
         }
-        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        codec.start()
+    }
 
-        FileOutputStream(outFile).use { fos ->
-            var inputOffset = 0
-            var isEOS = false
-            val bufferInfo = MediaCodec.BufferInfo()
+    private var reusableCodec: MediaCodec? = null
+    private val codecLock = Any()
 
-            while (!isEOS || (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) == 0) {
-                if (!isEOS) {
-                    val inputBufferIndex = codec.dequeueInputBuffer(10000)
-                    if (inputBufferIndex >= 0) {
-                        val inputBuffer = codec.getInputBuffer(inputBufferIndex)!!
-                        val capacity = inputBuffer.capacity()
-                        val bytesToFeed = minOf(dataSize - inputOffset, capacity)
+    @Synchronized
+    private fun getOrCreateCodec(): MediaCodec {
+        var codec = reusableCodec
+        if (codec == null) {
+            val format = MediaFormat.createAudioFormat("audio/mp4a-latm", SAMPLE_RATE, 1).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, 16000) // 16 kbps Ultra-Low Bandwidth
+            }
+            codec = MediaCodec.createEncoderByType("audio/mp4a-latm").apply {
+                configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                start()
+            }
+            reusableCodec = codec
+        }
+        return codec
+    }
 
-                        if (bytesToFeed > 0) {
-                            inputBuffer.put(pcmData, inputOffset, bytesToFeed)
-                            inputOffset += bytesToFeed
-                            codec.queueInputBuffer(inputBufferIndex, 0, bytesToFeed, 0, 0)
-                        } else {
-                            codec.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                            isEOS = true
+    private fun releaseReusableCodec() {
+        try {
+            reusableCodec?.stop()
+            reusableCodec?.release()
+        } catch (e: Exception) { /* ignore */ }
+        reusableCodec = null
+    }
+
+    private fun encodePcmToAac(pcmData: ByteArray, dataSize: Int, outFile: File) {
+        synchronized(codecLock) {
+            var codec: MediaCodec
+            try {
+                codec = getOrCreateCodec()
+            } catch (e: Exception) {
+                releaseReusableCodec()
+                codec = getOrCreateCodec()
+            }
+
+            try {
+                FileOutputStream(outFile).use { fos ->
+                    var inputOffset = 0
+                    var isEOS = false
+                    val bufferInfo = MediaCodec.BufferInfo()
+
+                    while (!isEOS || (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) == 0) {
+                        if (!isEOS) {
+                            val inputBufferIndex = codec.dequeueInputBuffer(10000)
+                            if (inputBufferIndex >= 0) {
+                                val inputBuffer = codec.getInputBuffer(inputBufferIndex)!!
+                                val capacity = inputBuffer.capacity()
+                                val bytesToFeed = minOf(dataSize - inputOffset, capacity)
+
+                                if (bytesToFeed > 0) {
+                                    inputBuffer.clear()
+                                    inputBuffer.put(pcmData, inputOffset, bytesToFeed)
+                                    inputOffset += bytesToFeed
+                                    codec.queueInputBuffer(inputBufferIndex, 0, bytesToFeed, 0, 0)
+                                } else {
+                                    codec.queueInputBuffer(inputBufferIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    isEOS = true
+                                }
+                            }
+                        }
+
+                        var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                        while (outputBufferIndex >= 0) {
+                            val outputBuffer = codec.getOutputBuffer(outputBufferIndex)!!
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                bufferInfo.size = 0
+                            }
+                            if (bufferInfo.size > 0) {
+                                outputBuffer.position(bufferInfo.offset)
+                                outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+
+                                // Add ADTS header for AAC chunk
+                                val packetLen = bufferInfo.size + 7
+                                val adtsHeader = ByteArray(7)
+                                addAdtsHeader(adtsHeader, packetLen)
+                                fos.write(adtsHeader)
+
+                                val data = ByteArray(bufferInfo.size)
+                                outputBuffer.get(data)
+                                fos.write(data)
+                            }
+                            codec.releaseOutputBuffer(outputBufferIndex, false)
+
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                break
+                            }
+                            outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
                         }
                     }
+                    fos.flush()
+                    fos.fd.sync()
                 }
 
-                var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
-                while (outputBufferIndex >= 0) {
-                    val outputBuffer = codec.getOutputBuffer(outputBufferIndex)!!
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        bufferInfo.size = 0
-                    }
-                    if (bufferInfo.size > 0) {
-                        outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-
-                        // Add ADTS header for AAC chunk
-                        val packetLen = bufferInfo.size + 7
-                        val adtsHeader = ByteArray(7)
-                        addAdtsHeader(adtsHeader, packetLen)
-                        fos.write(adtsHeader)
-
-                        val data = ByteArray(bufferInfo.size)
-                        outputBuffer.get(data)
-                        fos.write(data)
-                    }
-                    codec.releaseOutputBuffer(outputBufferIndex, false)
-
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        break
-                    }
-                    outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                // Flush codec to prepare for next chunk without destroying hardware driver
+                try {
+                    codec.flush()
+                } catch (e: Exception) {
+                    // If vendor codec doesn't support flush after EOS, release it so next chunk re-initializes cleanly
+                    releaseReusableCodec()
                 }
+
+            } catch (e: Exception) {
+                releaseReusableCodec()
+                throw e
             }
-            fos.flush()
-            fos.fd.sync()
         }
-        codec.stop()
-        codec.release()
     }
 
     private fun addAdtsHeader(packet: ByteArray, packetLen: Int) {
@@ -1520,7 +1632,7 @@ class AudioRecordService : Service() {
         notificationUpdaterJob?.cancel()
         notificationUpdaterJob = serviceScope.launch {
             while (isActive && (isRunning || isStandbyMode)) {
-                delay(1000)  // Broadcast live stats to in-app UI every second
+                delay(3000)  // Broadcast live stats to in-app UI every 3 seconds (reduces IPC battery load)
                 if (isRunning) {
                     val startMs = if (mainRecordingStartTimeMs > 0) mainRecordingStartTimeMs else hiddenRecordingStartTimeMs
                     if (startMs > 0) {
@@ -1563,13 +1675,14 @@ class AudioRecordService : Service() {
     // ══════════════════════════════════════════════════════════════════════
 
     private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "AudioMonitor::RecordingWakelock"
         ).apply {
             setReferenceCounted(false)
-            acquire(24 * 60 * 60 * 1000L)  // 24 hours CPU hold
+            acquire(60 * 60 * 1000L)  // 1 hour CPU hold while active recording (auto-expires safely)
         }
     }
 

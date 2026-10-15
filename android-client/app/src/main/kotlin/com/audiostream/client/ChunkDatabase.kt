@@ -116,6 +116,10 @@ interface ChunkDao {
     @Query("SELECT * FROM audio_chunks WHERE upload_status = 'COMPLETED'")
     suspend fun getCompleted(): List<AudioChunk>
 
+    /** Get count of completed chunks (RAM-efficient check). */
+    @Query("SELECT COUNT(*) FROM audio_chunks WHERE upload_status = 'COMPLETED'")
+    suspend fun getCompletedCount(): Int
+
     /** Delete a chunk record. */
     @Query("DELETE FROM audio_chunks WHERE uuid = :uuid")
     suspend fun delete(uuid: String)

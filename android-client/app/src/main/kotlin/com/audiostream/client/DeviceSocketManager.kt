@@ -32,7 +32,7 @@ class DeviceSocketManager(
     private var reconnectDelayMs = 2000L
 
     private val httpClient = OkHttpClient.Builder()
-        .pingInterval(15, TimeUnit.SECONDS) // Keeps connection alive through NAT/firewalls
+        .pingInterval(45, TimeUnit.SECONDS) // Relaxed from 15s to 45s to let mobile radio sleep
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // Infinite read timeout for WebSockets
         .build()

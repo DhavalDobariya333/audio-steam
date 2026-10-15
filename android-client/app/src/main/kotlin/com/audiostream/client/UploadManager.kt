@@ -53,6 +53,7 @@ class UploadManager(
     private val dao = ChunkDatabase.getInstance(context).chunkDao()
     private val isRunning = AtomicBoolean(false)
     private val currentRetryCount = AtomicInteger(0)
+    private val uploadSignal = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
 
     @Volatile
     private var activeMainSessionId: String? = null
@@ -101,6 +102,7 @@ class UploadManager(
             }
 
             // Main upload loop
+            uploadSignal.trySend(Unit)
             uploadLoop()
         }
     }
@@ -126,8 +128,10 @@ class UploadManager(
                 // Get next chunk to upload
                 val chunk = dao.getNextPending()
                 if (chunk == null) {
-                    // Nothing to upload — wait and check again
-                    delay(1000)
+                    // Nothing to upload — suspend waiting for new chunk signal (or check every 30s)
+                    withTimeoutOrNull(30_000L) {
+                        uploadSignal.receive()
+                    }
                     continue
                 }
 
@@ -356,9 +360,8 @@ class UploadManager(
                             onLog("✓ Uploaded: ${file.name} (local delete failed)")
                         }
 
-                        // Clean up completed DB entries periodically
-                        val completed = dao.getCompleted()
-                        if (completed.size > 100) {
+                        // Clean up completed DB entries periodically without loading them into memory
+                        if (dao.getCompletedCount() > 100) {
                             dao.deleteAllCompleted()
                         }
 
@@ -426,6 +429,7 @@ class UploadManager(
      */
     suspend fun enqueueChunk(chunk: AudioChunk) {
         dao.insert(chunk)
+        uploadSignal.trySend(Unit)
         updateStats()
         onLog("Enqueued chunk: ${File(chunk.filePath).name}")
     }

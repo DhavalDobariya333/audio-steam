@@ -82,31 +82,53 @@ class StorageManager(private val context: Context) {
         }
     }
 
+    // Thread-safe in-memory cache to prevent repeated disk I/O scans
+    private val cachedChunksSize = java.util.concurrent.atomic.AtomicLong(-1L)
+    private val cachedChunksCount = java.util.concurrent.atomic.AtomicInteger(-1)
+
+    private fun initCacheIfNeeded() {
+        if (cachedChunksCount.get() < 0) {
+            try {
+                val files = chunksDir.listFiles()?.filter { it.isFile && it.extension == "aac" }
+                val count = files?.size ?: 0
+                val size = files?.sumOf { it.length() } ?: 0L
+                cachedChunksCount.set(count)
+                cachedChunksSize.set(size)
+            } catch (e: Exception) {
+                cachedChunksCount.set(0)
+                cachedChunksSize.set(0L)
+            }
+        }
+    }
+
+    fun notifyChunkAdded(fileSize: Long) {
+        initCacheIfNeeded()
+        cachedChunksCount.incrementAndGet()
+        cachedChunksSize.addAndGet(fileSize)
+    }
+
+    fun notifyChunkDeleted(fileSize: Long) {
+        initCacheIfNeeded()
+        cachedChunksCount.decrementAndGet().coerceAtLeast(0)
+        cachedChunksSize.addAndGet(-fileSize).coerceAtLeast(0L)
+    }
+
     /**
      * Get the size of all chunk files currently stored locally.
+     * Uses in-memory cache to eliminate continuous disk I/O overhead.
      */
     fun getLocalChunksSize(): Long {
-        return try {
-            chunksDir.listFiles()
-                ?.filter { it.isFile && it.extension == "aac" }
-                ?.sumOf { it.length() }
-                ?: 0L
-        } catch (e: Exception) {
-            0L
-        }
+        initCacheIfNeeded()
+        return cachedChunksSize.get().coerceAtLeast(0L)
     }
 
     /**
      * Get count of local chunk files.
+     * Uses in-memory cache to eliminate continuous disk I/O overhead.
      */
     fun getLocalChunkCount(): Int {
-        return try {
-            chunksDir.listFiles()
-                ?.count { it.isFile && it.extension == "aac" }
-                ?: 0
-        } catch (e: Exception) {
-            0
-        }
+        initCacheIfNeeded()
+        return cachedChunksCount.get().coerceAtLeast(0)
     }
 
     /**
@@ -130,7 +152,13 @@ class StorageManager(private val context: Context) {
         return try {
             val file = File(filePath)
             if (file.exists() && file.absolutePath.startsWith(chunksDir.absolutePath)) {
-                file.delete()
+                val len = file.length()
+                if (file.delete()) {
+                    notifyChunkDeleted(len)
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             }
