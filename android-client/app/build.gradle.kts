@@ -16,9 +16,19 @@ android {
         versionName = "2.1"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "audiostream_release_pass"
+            keyAlias = "audiomonitor"
+            keyPassword = "audiostream_release_pass"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
