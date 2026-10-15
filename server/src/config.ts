@@ -24,6 +24,12 @@ export const DATABASE_PATH = path.join(PROJECT_ROOT, 'audio_stream.db');
 const rawStealthRoute = (process.env.STEALTH_ROUTE || '/c-ctrl-9842').trim();
 export const STEALTH_ROUTE = (rawStealthRoute.startsWith('/') ? rawStealthRoute : `/${rawStealthRoute}`).replace(/\/+$/, '') || '/c-ctrl-9842';
 
+// ── Authentication & Passwords ──
+export const DASHBOARD_USERNAME = process.env.DASHBOARD_USERNAME || 'admin@789';
+export const MAIN_PASSWORD = process.env.MAIN_PASSWORD || process.env.DASHBOARD_PASSWORD || 'cvb#345';
+export const STEALTH_PASSWORD = process.env.STEALTH_PASSWORD || 'stealth#9842';
+export const AUTH_SECRET = process.env.AUTH_SECRET || 'audio-stream-auth-key-secret-9842';
+
 // ── Audio ──
 export const CHUNK_DURATION_MS = 2000;
 export const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5 MB per chunk

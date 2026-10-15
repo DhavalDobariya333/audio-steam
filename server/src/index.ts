@@ -14,7 +14,14 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import { HOST, PORT, PUBLIC_DIR, STEALTH_DIR, STEALTH_ROUTE, DASHBOARD_DIR, LISTENER_DIR, STORAGE_ROOT } from './config';
+import { 
+    HOST, PORT, PUBLIC_DIR, STEALTH_DIR, STEALTH_ROUTE, DASHBOARD_DIR, LISTENER_DIR, STORAGE_ROOT,
+    MAIN_PASSWORD, STEALTH_PASSWORD, DASHBOARD_USERNAME 
+} from './config';
+import { 
+    SESSION_COOKIE_NAME, parseCookies, verifySessionToken, 
+    handleLogin, handleLogout, handleSessionCheck 
+} from './auth';
 import { initDatabase, closeDatabase, cleanupStaleSessions } from './database';
 import { ensureStorageRoot } from './storage';
 import { checkFfmpeg, finalizeHLS } from './hls';
@@ -29,10 +36,16 @@ import { initWebSocketServer } from './websocket';
 
 const app = express();
 
-// ── Basic Authentication Middleware ──
-const basicAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // Do not protect the upload routes (Android App), health check, or storage (HLS streams)
+// ── Dual-Password Authentication Middleware ──
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // 1. Exclude public and system routes
     if (
+        req.path === '/login' ||
+        req.path === '/login.html' ||
+        req.path === '/style.css' ||
+        req.path === '/favicon.ico' ||
+        req.path === '/up' ||
+        req.path.startsWith('/api/v1/auth') ||
         req.path.startsWith('/api/v1/broadcasts') || 
         req.path === '/api/v1/listen/active' ||
         req.path.startsWith('/api/v1/health') ||
@@ -43,25 +56,54 @@ const basicAuth = (req: express.Request, res: express.Response, next: express.Ne
         return next();
     }
 
-    const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
-    const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
-
-    const USERNAME = process.env.DASHBOARD_USERNAME || 'admin@789';
-    const PASSWORD = process.env.DASHBOARD_PASSWORD || 'cvb#345';
-
-    if (login && password && login === USERNAME && password === PASSWORD) {
-        return next();
+    // 2. Check Session Cookie (auth_session)
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionToken = cookies[SESSION_COOKIE_NAME];
+    if (sessionToken) {
+        const session = verifySessionToken(sessionToken);
+        if (session) {
+            req.userRole = session.role;
+            return next();
+        }
     }
 
-    res.set('WWW-Authenticate', 'Basic realm="Dashboard Access"');
-    res.status(401).send('Authentication required.');
+    // 3. Fallback: Check HTTP Basic Auth (for curl or automated clients)
+    const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+    if (b64auth) {
+        const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+        if (login === DASHBOARD_USERNAME) {
+            if (password === STEALTH_PASSWORD) {
+                req.userRole = 'stealth';
+                return next();
+            } else if (password === MAIN_PASSWORD) {
+                req.userRole = 'main';
+                return next();
+            }
+        }
+    }
+
+    // 4. Handle unauthenticated requests
+    const acceptsHtml = req.accepts(['html', 'json']) === 'html';
+    if (acceptsHtml && req.method === 'GET') {
+        return res.redirect('/login');
+    }
+
+    res.status(401).json({ error: 'Authentication required. Please log in.' });
 };
 
 // ── Middleware ──
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(basicAuth); // Apply Basic Auth
+app.use(authMiddleware);
+
+// ── Auth Endpoints ──
+app.post('/api/v1/auth/login', handleLogin);
+app.post('/api/v1/auth/logout', handleLogout);
+app.get('/api/v1/auth/session', handleSessionCheck);
+app.get(['/login', '/login.html'], (_req, res) => {
+    res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
+});
 
 // ── API Routes ──
 app.use('/api/v1/broadcasts', broadcastRoutes);
@@ -112,7 +154,10 @@ app.post('/api/v1/system/stealth-portal', (req, res) => {
 });
 
 // Stealth dashboard script (served only under dynamic STEALTH_ROUTE)
-app.get(`${STEALTH_ROUTE}/stealth.js`, (_req, res) => {
+app.get(`${STEALTH_ROUTE}/stealth.js`, (req, res) => {
+    if (req.userRole !== 'stealth') {
+        return res.status(404).send('Not found');
+    }
     const jsPath = path.join(STEALTH_DIR, 'stealth.js');
     if (!fs.existsSync(jsPath)) {
         return res.status(404).send('Not found');
@@ -122,7 +167,10 @@ app.get(`${STEALTH_ROUTE}/stealth.js`, (_req, res) => {
 });
 
 // Stealth dashboard route (serves stealth.html with dynamic script path injection)
-app.get([STEALTH_ROUTE, `${STEALTH_ROUTE}/`], (_req, res) => {
+app.get([STEALTH_ROUTE, `${STEALTH_ROUTE}/`], (req, res) => {
+    if (req.userRole !== 'stealth') {
+        return res.status(404).send('Not found');
+    }
     const htmlPath = path.join(STEALTH_DIR, 'stealth.html');
     if (!fs.existsSync(htmlPath)) {
         return res.status(404).send('Not found');

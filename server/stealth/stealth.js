@@ -105,6 +105,7 @@ const ui = {
     modalSessionId: document.getElementById('modal-session-id'),
     modalCancel: document.getElementById('modal-cancel'),
     modalConfirm: document.getElementById('modal-confirm'),
+    btnStealthLogout: document.getElementById('btn-stealth-logout'),
 };
 
 let hls = null;
@@ -122,6 +123,13 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindEvents() {
+    ui.btnStealthLogout?.addEventListener('click', async () => {
+        try {
+            await fetch('/api/v1/auth/logout', { method: 'POST' });
+        } catch (_) {}
+        window.location.href = '/login';
+    });
+
     ui.select?.addEventListener('change', (e) => loadSession(e.target.value));
     ui.btnPlay?.addEventListener('click', togglePlay);
     ui.btnRewind?.addEventListener('click', rewind15);

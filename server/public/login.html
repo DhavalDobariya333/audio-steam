@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Audio Console — System Access</title>
+    <meta name="description" content="Secure Gateway Terminal">
+    <meta name="theme-color" content="#07070e">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔒</text></svg>">
+
+    <style>
+        :root {
+            --bg-main: #07070e;
+            --bg-card: rgba(18, 18, 32, 0.75);
+            --border-color: rgba(255, 255, 255, 0.09);
+            --border-focus: rgba(124, 92, 252, 0.6);
+            --accent: #7c5cfc;
+            --accent-glow: rgba(124, 92, 252, 0.35);
+            --accent-hover: #6842f5;
+            --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.3);
+            --danger: #ef4444;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --font-heading: 'Outfit', sans-serif;
+            --font-body: 'Inter', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-main);
+            background-image: 
+                radial-gradient(circle at 20% 20%, rgba(124, 92, 252, 0.12) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.7) 0%, transparent 100%);
+            color: var(--text-main);
+            font-family: var(--font-body);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Ambient background glow elements */
+        .ambient-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            pointer-events: none;
+            opacity: 0.6;
+            animation: floatOrb 12s ease-in-out infinite alternate;
+        }
+
+        .ambient-orb--1 {
+            width: 320px;
+            height: 320px;
+            background: rgba(124, 92, 252, 0.15);
+            top: 10%;
+            left: 15%;
+        }
+
+        .ambient-orb--2 {
+            width: 260px;
+            height: 260px;
+            background: rgba(16, 185, 129, 0.12);
+            bottom: 12%;
+            right: 18%;
+            animation-duration: 16s;
+        }
+
+        @keyframes floatOrb {
+            0% { transform: translateY(0px) scale(1); }
+            100% { transform: translateY(-30px) scale(1.1); }
+        }
+
+        /* Glassmorphic Login Container */
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--bg-card);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 40px 32px;
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 40px -10px var(--accent-glow);
+            position: relative;
+            z-index: 10;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease;
+        }
+
+        .login-card.shake {
+            animation: cardShake 0.45s ease-in-out;
+        }
+
+        @keyframes cardShake {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-10px); }
+            40% { transform: translateX(10px); }
+            60% { transform: translateX(-6px); }
+            80% { transform: translateX(6px); }
+        }
+
+        /* Header & Icon */
+        .brand-header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .brand-icon-wrap {
+            width: 68px;
+            height: 68px;
+            margin: 0 auto 16px;
+            background: linear-gradient(135deg, rgba(124, 92, 252, 0.2), rgba(16, 185, 129, 0.15));
+            border: 1px solid rgba(124, 92, 252, 0.3);
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            box-shadow: 0 8px 24px rgba(124, 92, 252, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .brand-header:hover .brand-icon-wrap {
+            transform: scale(1.05) rotate(3deg);
+        }
+
+        .brand-title {
+            font-family: var(--font-heading);
+            font-size: 1.55rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: #ffffff;
+            margin-bottom: 6px;
+        }
+
+        .brand-subtitle {
+            font-size: 0.86rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* Form elements */
+        .form-group {
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .input-field {
+            width: 100%;
+            padding: 14px 44px 14px 16px;
+            background: rgba(10, 10, 20, 0.65);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-main);
+            font-family: var(--font-body);
+            font-size: 0.98rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .input-field:focus {
+            border-color: var(--accent);
+            background: rgba(14, 14, 28, 0.85);
+            box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.22);
+        }
+
+        .input-field.input-error {
+            border-color: var(--danger);
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+        }
+
+        .input-toggle-btn {
+            position: absolute;
+            right: 12px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.15rem;
+            cursor: pointer;
+            padding: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: color 0.15s ease;
+        }
+
+        .input-toggle-btn:hover {
+            color: var(--text-main);
+        }
+
+        /* Submit Button */
+        .btn-submit {
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+            border: none;
+            border-radius: 12px;
+            color: #ffffff;
+            font-family: var(--font-heading);
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            box-shadow: 0 8px 24px rgba(124, 92, 252, 0.35);
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 28px rgba(124, 92, 252, 0.45);
+        }
+
+        .btn-submit:active {
+            transform: translateY(0);
+        }
+
+        .btn-submit:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        /* Status & Alert Box */
+        .status-box {
+            display: none;
+            margin-top: 18px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            font-size: 0.85rem;
+            line-height: 1.4;
+            align-items: center;
+            gap: 10px;
+            animation: fadeIn 0.2s ease forwards;
+        }
+
+        .status-box.error {
+            display: flex;
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+        }
+
+        .status-box.success {
+            display: flex;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            color: #6ee7b7;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Spinner */
+        .spinner {
+            display: none;
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Subtle Footer Badge */
+        .login-footer {
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.74rem;
+            color: rgba(255, 255, 255, 0.25);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ambient-orb ambient-orb--1"></div>
+    <div class="ambient-orb ambient-orb--2"></div>
+
+    <div class="login-card" id="loginCard">
+        <div class="brand-header">
+            <div class="brand-icon-wrap" id="brandIcon">
+                🔒
+            </div>
+            <h1 class="brand-title">Audio Console</h1>
+            <p class="brand-subtitle">Enter your access authorization key</p>
+        </div>
+
+        <form id="loginForm" autocomplete="off">
+            <div class="form-group">
+                <label for="passwordInput" class="form-label">Access Password</label>
+                <div class="input-wrapper">
+                    <input 
+                        type="password" 
+                        id="passwordInput" 
+                        class="input-field" 
+                        placeholder="Enter password..." 
+                        required 
+                        autofocus
+                        autocomplete="current-password"
+                    >
+                    <button type="button" class="input-toggle-btn" id="togglePasswordBtn" title="Toggle password visibility">
+                        👁️
+                    </button>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-submit" id="btnSubmit">
+                <span class="spinner" id="btnSpinner"></span>
+                <span id="btnText">Authenticate & Unlock</span>
+            </button>
+
+            <div class="status-box" id="statusBox">
+                <span id="statusIcon">⚠️</span>
+                <span id="statusText">Invalid password</span>
+            </div>
+        </form>
+
+        <div class="login-footer">
+            Terminal Engine • Dual-Access Secured
+        </div>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('loginForm');
+        const loginCard = document.getElementById('loginCard');
+        const passwordInput = document.getElementById('passwordInput');
+        const togglePasswordBtn = document.getElementById('togglePasswordBtn');
+        const btnSubmit = document.getElementById('btnSubmit');
+        const btnSpinner = document.getElementById('btnSpinner');
+        const btnText = document.getElementById('btnText');
+        const statusBox = document.getElementById('statusBox');
+        const statusIcon = document.getElementById('statusIcon');
+        const statusText = document.getElementById('statusText');
+        const brandIcon = document.getElementById('brandIcon');
+
+        // Toggle Password Visibility
+        togglePasswordBtn.addEventListener('click', () => {
+            const isPassword = passwordInput.type === 'password';
+            passwordInput.type = isPassword ? 'text' : 'password';
+            togglePasswordBtn.textContent = isPassword ? '🙈' : '👁️';
+        });
+
+        // Form Submission
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const password = passwordInput.value.trim();
+            if (!password) return;
+
+            setLoading(true);
+            hideStatus();
+
+            try {
+                const res = await fetch('/api/v1/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    showSuccess(data.role, data.redirect);
+                    setTimeout(() => {
+                        window.location.href = data.redirect || '/';
+                    }, 600);
+                } else {
+                    showError(data.error || 'Access denied. Incorrect password.');
+                    setLoading(false);
+                }
+            } catch (err) {
+                showError('Network error connecting to authorization server.');
+                setLoading(false);
+            }
+        });
+
+        function setLoading(isLoading) {
+            btnSubmit.disabled = isLoading;
+            btnSpinner.style.display = isLoading ? 'inline-block' : 'none';
+            btnText.textContent = isLoading ? 'Verifying...' : 'Authenticate & Unlock';
+            if (isLoading) {
+                passwordInput.classList.remove('input-error');
+            }
+        }
+
+        function showError(msg) {
+            statusBox.className = 'status-box error';
+            statusIcon.textContent = '❌';
+            statusText.textContent = msg;
+            passwordInput.classList.add('input-error');
+            
+            // Shake animation
+            loginCard.classList.remove('shake');
+            void loginCard.offsetWidth; // trigger reflow
+            loginCard.classList.add('shake');
+            
+            passwordInput.select();
+            passwordInput.focus();
+        }
+
+        function showSuccess(role, redirect) {
+            statusBox.className = 'status-box success';
+            statusIcon.textContent = '✅';
+            brandIcon.textContent = role === 'stealth' ? '🕵️' : '🔓';
+            statusText.textContent = `Access granted [${role.toUpperCase()}]. Initializing...`;
+            btnSubmit.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+            btnText.textContent = 'Redirecting...';
+            btnSpinner.style.display = 'none';
+        }
+
+        function hideStatus() {
+            statusBox.style.display = 'none';
+            passwordInput.classList.remove('input-error');
+        }
+
+        // On load: check if already authenticated and redirect accordingly
+        (async function checkExistingSession() {
+            try {
+                const res = await fetch('/api/v1/auth/session');
+                const data = await res.json();
+                if (data.authenticated) {
+                    if (data.role === 'stealth' && data.stealthRoute) {
+                        window.location.href = data.stealthRoute;
+                    } else if (data.role === 'main') {
+                        window.location.href = '/';
+                    }
+                }
+            } catch (_) {}
+        })();
+    </script>
+</body>
+</html>

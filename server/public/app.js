@@ -38,6 +38,7 @@ const ui = {
     modalCancel: document.getElementById('modal-cancel'),
     modalConfirm: document.getElementById('modal-confirm'),
     toastContainer: document.getElementById('toast-container'),
+    btnLogout: document.getElementById('btn-logout'),
     
     // Secret Trigger to open /hidden
     secretTriggerHeader: document.getElementById('secret-trigger-header'),
@@ -52,6 +53,13 @@ document.addEventListener('DOMContentLoaded', () => {
 function bindEvents() {
     ui.btnRefresh?.addEventListener('click', fetchMainData);
     ui.clientFilter?.addEventListener('change', () => renderSessionsList());
+
+    ui.btnLogout?.addEventListener('click', async () => {
+        try {
+            await fetch('/api/v1/auth/logout', { method: 'POST' });
+        } catch (_) {}
+        window.location.href = '/login';
+    });
 
     ui.btnClosePlayer?.addEventListener('click', () => {
         if (ui.audioPlayer) ui.audioPlayer.pause();
