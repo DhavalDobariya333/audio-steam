@@ -242,6 +242,31 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
             break;
         }
 
+        case 'device_boot': {
+            const clientId = meta.clientId || msg.client_id;
+            console.log(`[ws] 🔄 Device ${clientId} REBOOTED and successfully auto-started!`);
+            broadcastLiveEvent({
+                type: 'device_boot',
+                clientId,
+                status: msg.status || 'reboot_recovered',
+                timestamp: new Date().toISOString()
+            });
+            break;
+        }
+
+        case 'watchdog_activation': {
+            const clientId = meta.clientId || msg.client_id;
+            const action = msg.action || 'check';
+            console.log(`[ws] ⏰ 2-Hour Watchdog triggered on ${clientId}: ${action}`);
+            broadcastLiveEvent({
+                type: 'watchdog_activation',
+                clientId,
+                action,
+                timestamp: new Date().toISOString()
+            });
+            break;
+        }
+
         default:
             console.log(`[ws] Unknown message from ${meta.clientId}:`, msg);
     }

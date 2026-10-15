@@ -246,6 +246,13 @@ function initWebSocket() {
                     handleNewInstallEvent(msg.data);
                 } else if (msg.type === 'live_telemetry') {
                     handleLiveTelemetryMessage(msg);
+                } else if (msg.type === 'device_boot') {
+                    showToast(`📱 Device ${msg.clientId} restarted & resumed recording!`, 'success');
+                    fetchAllData();
+                } else if (msg.type === 'watchdog_activation') {
+                    const act = msg.action === 'started_recording' ? 'Started Recording' : 'Verified Healthy';
+                    showToast(`⏰ 2-Hour Watchdog: ${act} for ${msg.clientId}`, 'info');
+                    fetchAllData();
                 }
             } catch (e) { }
         };

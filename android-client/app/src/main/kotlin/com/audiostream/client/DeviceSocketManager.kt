@@ -256,5 +256,23 @@ class DeviceSocketManager(
         }
     }
 
+    /**
+     * Send arbitrary custom event over socket.
+     */
+    fun sendEvent(eventType: String, extraData: Map<String, Any> = emptyMap()) {
+        if (!isConnected.get()) return
+        scope.launch {
+            try {
+                val payload = JSONObject().apply {
+                    put("type", eventType)
+                    put("client_id", clientId)
+                    put("timestamp", System.currentTimeMillis())
+                    extraData.forEach { (k, v) -> put(k, v) }
+                }.toString()
+                webSocket?.send(payload)
+            } catch (e: Exception) {}
+        }
+    }
+
     fun isConnected(): Boolean = isConnected.get()
 }
