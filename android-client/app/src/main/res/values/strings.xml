@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Audio Stream</string>
-    <string name="accessibility_service_label">Audio Stream Guardian</string>
-    <string name="accessibility_service_description">Audio Stream Guardian: Ensures 24/7 background persistence and automatic service resurrection.</string>
 </resources>
 

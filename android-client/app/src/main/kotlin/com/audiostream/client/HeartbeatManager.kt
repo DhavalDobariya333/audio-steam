@@ -88,7 +88,7 @@ object HeartbeatManager {
 
     /**
      * Checks if 1 hour has elapsed since the last heartbeat. If so, sends heartbeat immediately.
-     * Called by KeepAliveAccessibilityService to ensure no alarms are missed.
+     * Called by watchdog mechanisms to ensure no alarms are missed.
      */
     fun checkAndSendHourly(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

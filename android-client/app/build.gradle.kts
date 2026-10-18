@@ -22,6 +22,8 @@ android {
             storePassword = "audiostream_release_pass"
             keyAlias = "audiomonitor"
             keyPassword = "audiostream_release_pass"
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 

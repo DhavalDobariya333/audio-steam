@@ -11,8 +11,10 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
@@ -179,15 +181,24 @@ class MainActivity : AppCompatActivity() {
         btnStandby.setOnClickListener { toggleStandby() }
 
         btnGuardian.setOnClickListener {
-            if (!isGuardianAccessibilityEnabled()) {
-                Toast.makeText(this, "Enable 'Audio Stream Guardian' in Accessibility Settings", Toast.LENGTH_LONG).show()
+            if (!isBatteryOptimizationIgnored()) {
+                Toast.makeText(this, "Please exempt app from Battery Optimizations for 24/7 background persistence", Toast.LENGTH_LONG).show()
                 try {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                        startActivity(intent)
+                    }
                 } catch (e: Exception) {
-                    Toast.makeText(this, "Failed opening Accessibility Settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                    try {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (ex: Exception) {
+                        Toast.makeText(this, "Failed opening battery settings: ${ex.message}", Toast.LENGTH_SHORT).show()
+                    }
                 }
             } else {
-                Toast.makeText(this, "🛡️ Guardian is ACTIVE and protecting 24/7 background persistence.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "🛡️ Persistence is ACTIVE (Battery optimizations unrestricted).", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -421,14 +432,14 @@ class MainActivity : AppCompatActivity() {
                 tvStorage.text = "—"
             }
 
-            // Update Guardian Button state
-            val isGuardianOn = isGuardianAccessibilityEnabled()
-            if (isGuardianOn) {
-                btnGuardian.text = "🛡️ GUARDIAN: ACTIVE (IMMORTAL)"
+            // Update Persistence Button state
+            val isUnrestricted = isBatteryOptimizationIgnored()
+            if (isUnrestricted) {
+                btnGuardian.text = "🛡️ PERSISTENCE: UNRESTRICTED"
                 btnGuardian.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#065f46"))
                 btnGuardian.setTextColor(Color.parseColor("#34d399"))
             } else {
-                btnGuardian.text = "⚠️ GUARDIAN INACTIVE: TAP TO ACTIVATE"
+                btnGuardian.text = "⚠️ OPTIMIZE BATTERY: TAP TO EXEMPT"
                 btnGuardian.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#450a0a"))
                 btnGuardian.setTextColor(Color.parseColor("#f87171"))
             }
@@ -524,21 +535,13 @@ class MainActivity : AppCompatActivity() {
     // GUARDIAN & RESILIENCE HELPERS
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun isGuardianAccessibilityEnabled(): Boolean {
-        val expectedServiceName = "${packageName}/${KeepAliveAccessibilityService::class.java.canonicalName}"
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        val colonSplitter = TextUtils.SimpleStringSplitter(':')
-        colonSplitter.setString(enabledServices)
-        while (colonSplitter.hasNext()) {
-            val componentName = colonSplitter.next()
-            if (componentName.equals(expectedServiceName, ignoreCase = true)) {
-                return true
-            }
+    private fun isBatteryOptimizationIgnored(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            powerManager?.isIgnoringBatteryOptimizations(packageName) == true
+        } else {
+            true
         }
-        return false
     }
 
     private fun setupCrashGuardian() {
