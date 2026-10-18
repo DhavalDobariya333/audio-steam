@@ -70,8 +70,16 @@ class UploadManager(
     @Volatile
     private var currentDeviceInfo: String = deviceInfo
 
+    @Volatile
+    private var currentServerUrl: String = serverUrl
+
     fun updateDeviceInfo(newInfo: String) {
         this.currentDeviceInfo = newInfo
+    }
+
+    fun updateServerUrl(newUrl: String) {
+        this.currentServerUrl = newUrl
+        onLog("UploadManager server URL updated to: $newUrl")
     }
 
     private val uploadScope = CoroutineScope(
@@ -206,7 +214,7 @@ class UploadManager(
 
         // 2. Create new session if no active session recovered
         return try {
-            val createUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts"
+            val createUrl = currentServerUrl.trimEnd('/') + "/api/v1/broadcasts"
             val titleText = if (isMain) "Main Recording - $clientName" else "Hidden Recording - $clientName"
             val jsonBody = JSONObject().apply {
                 put("client_name", clientName)
@@ -250,7 +258,7 @@ class UploadManager(
         if (sid != null) {
             uploadScope.launch {
                 try {
-                    val endUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$sid/end"
+                    val endUrl = currentServerUrl.trimEnd('/') + "/api/v1/broadcasts/$sid/end"
                     val request = Request.Builder()
                         .url(endUrl)
                         .put(RequestBody.create("application/json".toMediaType(), "{}"))
@@ -278,7 +286,7 @@ class UploadManager(
         if (oldSessionId != null) {
             uploadScope.launch {
                 try {
-                    val endUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$oldSessionId/end"
+                    val endUrl = currentServerUrl.trimEnd('/') + "/api/v1/broadcasts/$oldSessionId/end"
                     val request = Request.Builder()
                         .url(endUrl)
                         .put(RequestBody.create("application/json".toMediaType(), "{}"))
@@ -314,7 +322,7 @@ class UploadManager(
         updateStats()
 
         return try {
-            val uploadUrl = serverUrl.trimEnd('/') + "/api/v1/broadcasts/$sessionId/chunk"
+            val uploadUrl = currentServerUrl.trimEnd('/') + "/api/v1/broadcasts/$sessionId/chunk"
 
             // Build multipart request
             val requestBody = MultipartBody.Builder()

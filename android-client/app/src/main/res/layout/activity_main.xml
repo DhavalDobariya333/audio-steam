@@ -194,6 +194,18 @@
         android:textStyle="bold"
         android:backgroundTint="#1a1a2e"
         android:textColor="#a78bfa"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Immortal Guardian Accessibility Button / Status -->
+    <Button
+        android:id="@+id/btnGuardian"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:text="🛡️ GUARDIAN MODE: TAP TO ACTIVATE"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:backgroundTint="#1e1b4b"
+        android:textColor="#a5b4fc"
         android:layout_marginBottom="16dp"/>
 
     <!-- Stats Grid -->

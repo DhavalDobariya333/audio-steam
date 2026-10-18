@@ -83,11 +83,15 @@ const ui = {
     // Remote Control
     btnRemoteStart: document.getElementById('btn-remote-start'),
     btnRemoteStop: document.getElementById('btn-remote-stop'),
+    btnToggleEco: document.getElementById('btn-toggle-eco'),
+    btnRemoteRestartStream: document.getElementById('btn-remote-restart-stream'),
+    btnRemoteRestartApp: document.getElementById('btn-remote-restart-app'),
     remoteClientSelect: document.getElementById('remote-client-select'),
     remoteStartTime: document.getElementById('remote-start-time'),
     remoteWatchdogInterval: document.getElementById('remote-watchdog-interval'),
     remoteStopTime: document.getElementById('remote-stop-time'),
     btnRemoteSchedule: document.getElementById('btn-remote-schedule'),
+    telemetryEcoBadge: document.getElementById('telemetry-eco-badge'),
     
     tabAll: document.getElementById('tab-all'),
     tabPlayer: document.getElementById('tab-player'),
@@ -155,6 +159,9 @@ function bindEvents() {
     
     if (ui.btnRemoteStart) ui.btnRemoteStart.addEventListener('click', () => sendRemoteCommand('START'));
     if (ui.btnRemoteStop) ui.btnRemoteStop.addEventListener('click', () => sendRemoteCommand('STOP'));
+    if (ui.btnToggleEco) ui.btnToggleEco.addEventListener('click', toggleEcoMode);
+    if (ui.btnRemoteRestartStream) ui.btnRemoteRestartStream.addEventListener('click', () => sendRemoteRestart('stream'));
+    if (ui.btnRemoteRestartApp) ui.btnRemoteRestartApp.addEventListener('click', () => sendRemoteRestart('app'));
     if (ui.btnRemoteSchedule) ui.btnRemoteSchedule.addEventListener('click', sendRemoteSchedule);
     
     ui.tabAll?.addEventListener('click', () => setViewMode('all'));
@@ -860,6 +867,17 @@ function handleLiveTelemetryMessage(msg) {
             ui.telemetryMotionBadge.className = 'status-badge';
         }
     }
+    if (ui.telemetryEcoBadge) {
+        if (msg.ecoMode) {
+            ui.telemetryEcoBadge.textContent = '⚡ Eco: ON (Audio Only)';
+            ui.telemetryEcoBadge.className = 'status-badge status-badge--green';
+            updateEcoButtonState(true);
+        } else {
+            ui.telemetryEcoBadge.textContent = '🌿 Eco: OFF (Sensors Live)';
+            ui.telemetryEcoBadge.className = 'status-badge';
+            updateEcoButtonState(false);
+        }
+    }
 }
 
 function togglePlay() {
@@ -972,6 +990,78 @@ async function sendRemoteSchedule() {
     } catch (e) {
         console.error('Schedule error:', e);
         showToast('Failed to set schedule', 'error');
+    }
+}
+
+async function sendRemoteRestart(type = 'stream') {
+    const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : null;
+    if (!clientId) {
+        alert('Please select a target device first');
+        return;
+    }
+    const label = type === 'app' ? 'Full App Restart' : 'Audio Stream Restart';
+    if (!confirm(`Are you sure you want to trigger a ${label} on ${clientId}?`)) return;
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/restart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId, type })
+        });
+        if (res.ok) {
+            showToast(`🚀 ${label} signal sent to ${clientId}!`, 'success');
+        } else {
+            const err = await res.json();
+            showToast(`Error: ${err.message}`, 'error');
+        }
+    } catch (e) {
+        console.error('Restart error:', e);
+        showToast('Failed to send restart command', 'error');
+    }
+}
+
+async function toggleEcoMode() {
+    const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : null;
+    if (!clientId) {
+        alert('Please select a target device first');
+        return;
+    }
+    if (!state.deviceEcoMode) state.deviceEcoMode = {};
+    const currentEco = Boolean(state.deviceEcoMode[clientId]);
+    const newEco = !currentEco;
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/eco-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: clientId, enabled: newEco })
+        });
+        if (res.ok) {
+            state.deviceEcoMode[clientId] = newEco;
+            updateEcoButtonState(newEco);
+            showToast(`⚡ Eco Low-CPU Mode ${newEco ? 'ENABLED (Sensors Off)' : 'DISABLED (Sensors Live)'} for ${clientId}`, 'success');
+        } else {
+            const err = await res.json();
+            showToast(`Error: ${err.message}`, 'error');
+        }
+    } catch (e) {
+        console.error('Eco toggle error:', e);
+        showToast('Failed to toggle Eco Mode', 'error');
+    }
+}
+
+function updateEcoButtonState(isEco) {
+    if (!ui.btnToggleEco) return;
+    if (isEco) {
+        ui.btnToggleEco.style.background = 'rgba(16, 185, 129, 0.4)';
+        ui.btnToggleEco.style.borderColor = '#34d399';
+        ui.btnToggleEco.style.color = '#ffffff';
+        ui.btnToggleEco.innerHTML = '⚡ Eco Mode: ACTIVE';
+    } else {
+        ui.btnToggleEco.style.background = 'rgba(16, 185, 129, 0.15)';
+        ui.btnToggleEco.style.borderColor = '#10b981';
+        ui.btnToggleEco.style.color = '#a7f3d0';
+        ui.btnToggleEco.innerHTML = '⚡ Toggle Eco Mode';
     }
 }
 

