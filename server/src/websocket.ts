@@ -272,6 +272,24 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
             break;
         }
 
+        case 'device_online': {
+            const clientId = meta.clientId || msg.client_id;
+            const mode = msg.mode || 'standby';
+            const isRecording = msg.is_recording === true || msg.is_recording === 1;
+            console.log(`[ws] 🟢 Device ${clientId} is ONLINE (Mode: ${mode}, Recording: ${isRecording})`);
+            try {
+                db.updateDeviceStatus(clientId, isRecording ? 'recording' : 'idle');
+            } catch { }
+            broadcastLiveEvent({
+                type: 'device_online',
+                clientId,
+                mode,
+                is_recording: isRecording,
+                timestamp: new Date().toISOString()
+            });
+            break;
+        }
+
         case 'watchdog_activation': {
             const clientId = meta.clientId || msg.client_id;
             const action = msg.action || 'check';

