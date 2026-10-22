@@ -326,10 +326,10 @@ function parseChunkTelemetry(filename: string, chunk: db.Chunk): DecodedTelemetr
         }
 
         const powerCode = metaMatch[6];
-        if (powerCode === 'CAC') powerSource = 'Wall AC Fast Charger';
-        else if (powerCode === 'CUSB') powerSource = 'PC / USB Cable';
-        else if (powerCode === 'CWIR') powerSource = 'Wireless Charging';
-        else if (powerCode === 'CBAT') powerSource = 'Battery (Unplugged)';
+        if (powerCode === 'CAC' || powerCode === 'AC') powerSource = 'Wall AC Fast Charger';
+        else if (powerCode === 'CUSB' || powerCode === 'USB') powerSource = 'PC / USB Cable';
+        else if (powerCode === 'CWIR' || powerCode === 'WIR') powerSource = 'Wireless Charging';
+        else if (powerCode === 'CBAT' || powerCode === 'BAT') powerSource = 'Battery (Unplugged)';
 
         const ringerCode = metaMatch[7];
         if (ringerCode === 'RS') ringerMode = 'Silent';

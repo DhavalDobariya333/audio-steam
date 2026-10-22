@@ -11,6 +11,7 @@ const state = {
     dashboardSessions: [],
     currentSession: null,
     deleteTargetId: null,
+    selectedSessions: new Set(),
 };
 
 const ui = {
@@ -40,6 +41,15 @@ const ui = {
     toastContainer: document.getElementById('toast-container'),
     btnLogout: document.getElementById('btn-logout'),
     
+    // Bulk Multi-Select Actions
+    btnSelectAll: document.getElementById('btn-select-all'),
+    selectAllText: document.getElementById('select-all-text'),
+    bulkToolbar: document.getElementById('bulk-toolbar'),
+    bulkSelectedCount: document.getElementById('bulk-selected-count'),
+    btnBulkProDownload: document.getElementById('btn-bulk-pro-download'),
+    btnBulkAudioDownload: document.getElementById('btn-bulk-audio-download'),
+    btnBulkClear: document.getElementById('btn-bulk-clear'),
+
     // Secret Trigger to open /hidden
     secretTriggerHeader: document.getElementById('secret-trigger-header'),
 };
@@ -68,6 +78,12 @@ function bindEvents() {
 
     ui.modalCancel?.addEventListener('click', closeModal);
     ui.modalConfirm?.addEventListener('click', confirmDelete);
+
+    // Bulk selection toolbar events
+    ui.btnSelectAll?.addEventListener('click', toggleSelectAll);
+    ui.btnBulkClear?.addEventListener('click', clearSelection);
+    ui.btnBulkProDownload?.addEventListener('click', () => downloadSelectedSessions('pro_chunks'));
+    ui.btnBulkAudioDownload?.addEventListener('click', () => downloadSelectedSessions('audio'));
 
     // Secret 6-tap Trigger on Header -> Navigates to unique stealth route
     if (ui.secretTriggerHeader) {
@@ -162,10 +178,13 @@ function renderSessionsList() {
     } else {
         ui.sessionList.innerHTML = generateSessionsHtml(sessions);
     }
+    updateBulkToolbar();
+    updateSelectAllButtonText();
 }
 
 function generateSessionsHtml(sessionsArray) {
     return sessionsArray.map(s => {
+        const isSelected = state.selectedSessions.has(s.session_id);
         const duration = formatTime(s.total_duration || 0);
         const dateStr = formatIST(s.created_at);
         const sizeStr = formatSize(s.total_bytes || 0);
@@ -175,8 +194,11 @@ function generateSessionsHtml(sessionsArray) {
         const chunkZipUrl = `/api/v1/broadcasts/${s.session_id}/export-channel?format=zip`;
 
         return `
-            <li class="session-card session-card--ended">
+            <li class="session-card session-card--ended ${isSelected ? 'session-card--selected' : ''}" id="card-${s.session_id}">
                 <div class="session-card__header">
+                    <label class="session-check-label" onclick="event.stopPropagation();" title="Select for Pro Batch ZIP Export">
+                        <input type="checkbox" class="session-checkbox" data-id="${s.session_id}" ${isSelected ? 'checked' : ''} onchange="toggleSessionSelect('${s.session_id}', this.checked)">
+                    </label>
                     <div class="session-card__device">
                         <div class="device-icon">🎙️</div>
                         <div class="device-details">
@@ -321,3 +343,99 @@ function formatSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// MULTI-SESSION SELECTION & BATCH PRO DOWNLOAD
+// ════════════════════════════════════════════════════════════════════════════
+
+window.toggleSessionSelect = function(sessionId, isChecked) {
+    if (isChecked) {
+        state.selectedSessions.add(sessionId);
+    } else {
+        state.selectedSessions.delete(sessionId);
+    }
+    const card = document.getElementById(`card-${sessionId}`);
+    if (card) {
+        if (isChecked) card.classList.add('session-card--selected');
+        else card.classList.remove('session-card--selected');
+    }
+    updateBulkToolbar();
+    updateSelectAllButtonText();
+};
+
+function updateSelectAllButtonText() {
+    if (!ui.selectAllText) return;
+    const allSessions = state.dashboardSessions;
+    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
+    const visibleSessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
+    const allVisibleSelected = visibleSessions.length > 0 && visibleSessions.every(s => state.selectedSessions.has(s.session_id));
+    ui.selectAllText.textContent = allVisibleSelected ? 'Deselect All' : 'Select All';
+}
+
+function toggleSelectAll() {
+    const allSessions = state.dashboardSessions;
+    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
+    const visibleSessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
+    if (visibleSessions.length === 0) return;
+
+    const allVisibleSelected = visibleSessions.every(s => state.selectedSessions.has(s.session_id));
+    if (allVisibleSelected) {
+        visibleSessions.forEach(s => state.selectedSessions.delete(s.session_id));
+    } else {
+        visibleSessions.forEach(s => state.selectedSessions.add(s.session_id));
+    }
+    renderSessionsList();
+}
+
+function clearSelection() {
+    state.selectedSessions.clear();
+    renderSessionsList();
+}
+
+function updateBulkToolbar() {
+    const count = state.selectedSessions.size;
+    if (ui.bulkSelectedCount) ui.bulkSelectedCount.textContent = count;
+    if (ui.bulkToolbar) {
+        if (count > 0) {
+            ui.bulkToolbar.classList.add('visible');
+        } else {
+            ui.bulkToolbar.classList.remove('visible');
+        }
+    }
+}
+
+function downloadSelectedSessions(format = 'pro_chunks') {
+    const ids = Array.from(state.selectedSessions);
+    if (ids.length === 0) {
+        showToast('Please select at least one session to download', 'warning');
+        return;
+    }
+
+    const formatLabel = format === 'audio' ? 'Merged Audio ZIP' : 'Pro Chunks & Telemetry ZIP';
+    showToast(`🚀 Streaming ${formatLabel} for ${ids.length} session${ids.length > 1 ? 's' : ''}...`, 'success');
+
+    // Submit hidden POST form to trigger direct streaming download
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/api/v1/broadcasts/batch-export-zip';
+    form.style.display = 'none';
+
+    const inputIds = document.createElement('input');
+    inputIds.type = 'hidden';
+    inputIds.name = 'session_ids';
+    inputIds.value = ids.join(',');
+    form.appendChild(inputIds);
+
+    const inputFormat = document.createElement('input');
+    inputFormat.type = 'hidden';
+    inputFormat.name = 'format';
+    inputFormat.value = format;
+    form.appendChild(inputFormat);
+
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(() => {
+        if (document.body.contains(form)) document.body.removeChild(form);
+    }, 2000);
+}
+

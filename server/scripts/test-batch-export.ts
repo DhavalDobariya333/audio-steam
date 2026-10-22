@@ -104,6 +104,38 @@ async function run() {
         // Check ZIP magic header (PK\x03\x04)
         assert(resZip.buffer[0] === 0x50 && resZip.buffer[1] === 0x4B, 'Buffer has valid ZIP signature (PK)');
 
+        const zipStr = resZip.buffer.toString('binary');
+        assert(zipStr.includes('SESSION_REPORT.txt'), 'ZIP contains SESSION_REPORT.txt entry');
+        assert(zipStr.includes('telemetry_timeline.csv'), 'ZIP contains telemetry_timeline.csv entry');
+        assert(zipStr.includes('metadata.json'), 'ZIP contains metadata.json entry');
+        assert(zipStr.includes('chunk_000001.aac'), 'ZIP contains raw chunk audio file entry');
+
+        // Extract ZIP to verify contents
+        const tempZipPath = path.join(__dirname, `temp_test_${Date.now()}.zip`);
+        const tempExtractDir = path.join(__dirname, `temp_extracted_${Date.now()}`);
+        fs.writeFileSync(tempZipPath, resZip.buffer);
+        try {
+            require('child_process').execSync(`powershell -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${tempExtractDir}' -Force"`);
+            const subdirs = fs.readdirSync(tempExtractDir);
+            let reportContent = '';
+            for (const sub of subdirs) {
+                const subPath = path.join(tempExtractDir, sub);
+                if (fs.statSync(subPath).isDirectory()) {
+                    const reportPath = path.join(subPath, 'SESSION_REPORT.txt');
+                    if (fs.existsSync(reportPath)) {
+                        reportContent = fs.readFileSync(reportPath, 'utf8');
+                        break;
+                    }
+                }
+            }
+            assert(reportContent.length > 0, 'SESSION_REPORT.txt found in extracted archive');
+            assert(reportContent.includes('Start Battery    : 88%'), 'SESSION_REPORT.txt contains Start Battery: 88%');
+            assert(reportContent.includes('Power States     : Wall AC Fast Charger'), 'SESSION_REPORT.txt contains Wall AC Fast Charger');
+        } finally {
+            try { fs.unlinkSync(tempZipPath); } catch {}
+            try { fs.rmSync(tempExtractDir, { recursive: true, force: true }); } catch {}
+        }
+
         // Test 3: GET endpoint with query params
         console.log('\n3. Testing Pro Batch ZIP export (GET)...');
         const resGet = await request({

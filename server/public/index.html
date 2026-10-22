@@ -68,10 +68,14 @@
                     </div>
                 </div>
 
-                <div class="filter-box" style="margin-bottom: 16px;">
-                    <select id="client-filter" class="select-field select-field--sm">
+                <div class="filter-box-multi" style="margin-bottom: 16px;">
+                    <select id="client-filter" class="select-field select-field--sm" style="flex: 1; min-width: 160px;">
                         <option value="">All Devices / Clients</option>
                     </select>
+                    <button class="btn-select-all" id="btn-select-all" title="Select / Deselect all visible sessions">
+                        <span>☑️</span>
+                        <span id="select-all-text">Select All</span>
+                    </button>
                 </div>
 
                 <!-- Active Recording Player Box -->
@@ -106,6 +110,25 @@
                 <button class="btn btn--secondary" id="modal-cancel">Cancel</button>
                 <button class="btn btn--danger" id="modal-confirm">Delete Permanently</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Floating Bulk Actions Toolbar -->
+    <div class="bulk-toolbar" id="bulk-toolbar">
+        <div class="bulk-toolbar__info">
+            <span class="bulk-toolbar__badge" id="bulk-selected-count">0</span>
+            <span class="bulk-toolbar__label">Selected</span>
+        </div>
+        <div class="bulk-toolbar__actions">
+            <button class="bulk-btn bulk-btn--pro" id="btn-bulk-pro-download" title="Pro Download (Full Details, Battery & Chunks ZIP)">
+                <span>🚀</span> Pro Download ZIP
+            </button>
+            <button class="bulk-btn bulk-btn--audio" id="btn-bulk-audio-download" title="Download Merged Audio ZIP">
+                <span>📥</span> Merged Audio ZIP
+            </button>
+            <button class="bulk-btn bulk-btn--clear" id="btn-bulk-clear" title="Clear All Selections">
+                <span>✕</span> Clear
+            </button>
         </div>
     </div>
 
