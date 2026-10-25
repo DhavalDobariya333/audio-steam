@@ -86,6 +86,24 @@ interface ChunkDao {
     """)
     suspend fun getNextPending(): AudioChunk?
 
+    /** Get the next high-priority in-call chunk to upload immediately. */
+    @Query("""
+        SELECT * FROM audio_chunks 
+        WHERE upload_status IN ('PENDING', 'FAILED') AND in_call = 1
+        ORDER BY created_at ASC 
+        LIMIT 1
+    """)
+    suspend fun getNextPriorityPending(): AudioChunk?
+
+    /** Get a batch of pending chunks for offline ZIP packaging. */
+    @Query("""
+        SELECT * FROM audio_chunks 
+        WHERE upload_status IN ('PENDING', 'FAILED')
+        ORDER BY created_at ASC 
+        LIMIT :limit
+    """)
+    suspend fun getPendingBatch(limit: Int): List<AudioChunk>
+
     /** Mark a chunk as currently being uploaded. */
     @Query("UPDATE audio_chunks SET upload_status = 'UPLOADING', last_attempt_at = :now WHERE uuid = :uuid")
     suspend fun markUploading(uuid: String, now: Long = System.currentTimeMillis())
@@ -93,6 +111,10 @@ interface ChunkDao {
     /** Mark a chunk as successfully uploaded. */
     @Query("UPDATE audio_chunks SET upload_status = 'COMPLETED' WHERE uuid = :uuid")
     suspend fun markCompleted(uuid: String)
+
+    /** Mark multiple chunks as completed in batch. */
+    @Query("UPDATE audio_chunks SET upload_status = 'COMPLETED' WHERE uuid IN (:uuids)")
+    suspend fun markBatchCompleted(uuids: List<String>)
 
     /** Mark a chunk as failed (increment retry count, reset to PENDING for retry). */
     @Query("""

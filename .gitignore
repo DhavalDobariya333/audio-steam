@@ -25,6 +25,8 @@ env/
 
 # Server data
 recordings/
+server/public/storage/
+server/storage/
 *.db
 *.db-wal
 *.db-shm
@@ -38,6 +40,7 @@ android-client/.tools/
 *.apk
 !/app.apk
 !/AudioStreamApp-latest.apk
+!/AudioStreamApp-release.apk
 *.aab
 *.keystore
 *.jks
@@ -58,3 +61,4 @@ Thumbs.db
 # Antigravity / AI Agents
 .agents/
 .gemini/
+.superpowers/

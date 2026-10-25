@@ -1,3 +1,7 @@
+param(
+    [string]$BuildType = "debug"
+)
+
 $ErrorActionPreference = "Stop"
 
 # We will store all downloaded tools in a local ".tools" folder so we don't mess up your PC
@@ -44,15 +48,21 @@ if (-not (Test-Path "$ToolsDir\gradle-8.2")) {
 }
 $GradleBin = "$ToolsDir\gradle-8.2\bin\gradle.bat"
 
-Write-Host "5. Compiling the Android APK..." -ForegroundColor Cyan
+$TaskName = if ($BuildType -eq "release") { "assembleRelease" } else { "assembleDebug" }
+$SubDir = if ($BuildType -eq "release") { "release" } else { "debug" }
+$ApkName = if ($BuildType -eq "release") { "app-release.apk" } else { "app-debug.apk" }
+
+Write-Host "5. Compiling the Android APK ($TaskName)..." -ForegroundColor Cyan
 Set-Location -Path $PSScriptRoot
-& $GradleBin assembleDebug
+& $GradleBin $TaskName
 
 if ($LASTEXITCODE -eq 0) {
+    $ApkPath = "$PSScriptRoot\app\build\outputs\apk\$SubDir\$ApkName"
+    $DestPath = "$PSScriptRoot\..\AudioStreamApp-$SubDir.apk"
+    Copy-Item $ApkPath -Destination $DestPath -Force
     Write-Host "`n========================================================" -ForegroundColor Green
-    Write-Host " SUCCESS! " -ForegroundColor Green
-    Write-Host " Your APK is ready to send to your friend:" -ForegroundColor Green
-    Write-Host " PATH: $PSScriptRoot\app\build\outputs\apk\debug\app-debug.apk" -ForegroundColor Green
+    Write-Host " SUCCESS! ($BuildType signed APK ready)" -ForegroundColor Green
+    Write-Host " APK PATH: $DestPath" -ForegroundColor Green
     Write-Host "========================================================" -ForegroundColor Green
 } else {
     Write-Host "`nBUILD FAILED." -ForegroundColor Red

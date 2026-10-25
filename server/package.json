@@ -11,6 +11,7 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
+    "adm-zip": "^0.6.1",
     "archiver": "^5.3.2",
     "better-sqlite3": "^8.7.0",
     "cors": "^2.8.5",
@@ -21,6 +22,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.6.0",
     "@types/archiver": "^5.3.4",
     "@types/better-sqlite3": "^7.6.11",
     "@types/cors": "^2.8.17",

@@ -67,9 +67,19 @@ export function saveChunk(
     const rawDir = getRawDir(sessionId);
     fs.mkdirSync(rawDir, { recursive: true });
 
-    // Filename: zero-padded sequence number
-    const ext = path.extname(originalFilename) || '.wav';
-    const filename = `chunk_${sequenceNum.toString().padStart(6, '0')}${ext}`;
+    // Preserve human-readable chunk filename with date & telemetry
+    let ext = path.extname(originalFilename) || '.aac';
+    const isDisguised = (ext === '.dat' || ext === '.tmp');
+    if (isDisguised) {
+        ext = '.aac';
+    }
+    let filename: string;
+    if (originalFilename && originalFilename.startsWith('chunk_')) {
+        const base = path.basename(originalFilename, path.extname(originalFilename));
+        filename = `${base}${ext}`;
+    } else {
+        filename = `chunk_${sequenceNum.toString().padStart(6, '0')}${ext}`;
+    }
     const filepath = path.join(rawDir, filename);
 
     fs.writeFileSync(filepath, buffer);
@@ -106,6 +116,7 @@ export function deleteSessionFiles(sessionId: string): boolean {
 
     try {
         fs.rmSync(sessionDir, { recursive: true, force: true });
+        invalidateStorageCache();
         console.log(`[storage] Deleted session directory: ${sessionId}`);
         return true;
     } catch (err) {
@@ -115,7 +126,7 @@ export function deleteSessionFiles(sessionId: string): boolean {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// DISK INFO
+// DISK INFO (CACHED TO PREVENT EVENT-LOOP STALLS)
 // ════════════════════════════════════════════════════════════════════════════
 
 export interface StorageInfo {
@@ -126,7 +137,21 @@ export interface StorageInfo {
     free_human: string;
 }
 
+let cachedStorageInfo: StorageInfo | null = null;
+let lastStorageCheck = 0;
+const STORAGE_CACHE_TTL_MS = 60 * 1000; // Cache for 60 seconds
+
+export function invalidateStorageCache(): void {
+    cachedStorageInfo = null;
+    lastStorageCheck = 0;
+}
+
 export function getStorageInfo(): StorageInfo {
+    const now = Date.now();
+    if (cachedStorageInfo && (now - lastStorageCheck) < STORAGE_CACHE_TTL_MS) {
+        return cachedStorageInfo;
+    }
+
     let totalBytes = 0;
     let sessionCount = 0;
 
@@ -142,7 +167,7 @@ export function getStorageInfo(): StorageInfo {
         }
     } catch { /* ignore */ }
 
-    // Get free disk space (Node.js 18.15+ has fs.statfsSync)
+    // Get free disk space (Node.js 18.15+ has fs.statfsSync - instant kernel stat)
     let freeBytes = 0;
     try {
         const stats = fs.statfsSync(STORAGE_ROOT);
@@ -151,13 +176,16 @@ export function getStorageInfo(): StorageInfo {
         // Fallback — not available on older Node.js
     }
 
-    return {
+    cachedStorageInfo = {
         sessions_on_disk: sessionCount,
         total_bytes: totalBytes,
         total_human: formatSize(totalBytes),
         free_bytes: freeBytes,
         free_human: formatSize(freeBytes),
     };
+    lastStorageCheck = now;
+
+    return cachedStorageInfo;
 }
 
 function getDirSize(dirPath: string): number {

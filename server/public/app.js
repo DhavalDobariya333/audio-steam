@@ -11,28 +11,32 @@ const state = {
     dashboardSessions: [],
     currentSession: null,
     deleteTargetId: null,
-    selectedSessions: new Set(),
+    lastSessionsFingerprint: '',
+    lastClientsKey: '',
 };
+
+let mainHls = null;
+const selectedMainSessionIds = new Set();
 
 const ui = {
     sessionList: document.getElementById('session-list'),
     sessionCount: document.getElementById('session-count'),
     btnRefresh: document.getElementById('btn-refresh'),
     clientFilter: document.getElementById('client-filter'),
-    
+
     // Stats
     statSessions: document.getElementById('stat-sessions'),
     statChunks: document.getElementById('stat-chunks'),
     statDuration: document.getElementById('stat-duration'),
     statStorage: document.getElementById('stat-storage'),
-    
+
     // Inline Player
     playerBox: document.getElementById('inline-player-box'),
     audioPlayer: document.getElementById('main-audio-player'),
     playerTitle: document.getElementById('player-title'),
     playerMeta: document.getElementById('player-meta'),
     btnClosePlayer: document.getElementById('btn-close-player'),
-    
+
     // Modal
     modalOverlay: document.getElementById('modal-overlay'),
     modalSessionId: document.getElementById('modal-session-id'),
@@ -40,18 +44,12 @@ const ui = {
     modalConfirm: document.getElementById('modal-confirm'),
     toastContainer: document.getElementById('toast-container'),
     btnLogout: document.getElementById('btn-logout'),
-    
-    // Bulk Multi-Select Actions
-    btnSelectAll: document.getElementById('btn-select-all'),
-    selectAllText: document.getElementById('select-all-text'),
-    bulkToolbar: document.getElementById('bulk-toolbar'),
-    bulkSelectedCount: document.getElementById('bulk-selected-count'),
-    btnBulkProDownload: document.getElementById('btn-bulk-pro-download'),
-    btnBulkAudioDownload: document.getElementById('btn-bulk-audio-download'),
-    btnBulkClear: document.getElementById('btn-bulk-clear'),
 
     // Secret Trigger to open /hidden
     secretTriggerHeader: document.getElementById('secret-trigger-header'),
+    liveBadge: document.getElementById('main-live-badge'),
+    chunkInspectorBox: document.getElementById('main-chunk-inspector-box'),
+    currentChunkName: document.getElementById('main-current-chunk-name'),
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -61,29 +59,34 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindEvents() {
-    ui.btnRefresh?.addEventListener('click', fetchMainData);
-    ui.clientFilter?.addEventListener('change', () => renderSessionsList());
+    ui.btnRefresh?.addEventListener('click', () => {
+        state.lastSessionsFingerprint = '';
+        fetchMainData();
+    });
+    ui.clientFilter?.addEventListener('change', () => {
+        state.lastSessionsFingerprint = '';
+        renderSessionsList();
+    });
 
     ui.btnLogout?.addEventListener('click', async () => {
         try {
             await fetch('/api/v1/auth/logout', { method: 'POST' });
-        } catch (_) {}
+        } catch (_) { }
         window.location.href = '/login';
     });
 
     ui.btnClosePlayer?.addEventListener('click', () => {
+        if (mainHls) {
+            mainHls.destroy();
+            mainHls = null;
+        }
         if (ui.audioPlayer) ui.audioPlayer.pause();
         if (ui.playerBox) ui.playerBox.style.display = 'none';
+        if (ui.liveBadge) ui.liveBadge.style.display = 'none';
     });
 
     ui.modalCancel?.addEventListener('click', closeModal);
     ui.modalConfirm?.addEventListener('click', confirmDelete);
-
-    // Bulk selection toolbar events
-    ui.btnSelectAll?.addEventListener('click', toggleSelectAll);
-    ui.btnBulkClear?.addEventListener('click', clearSelection);
-    ui.btnBulkProDownload?.addEventListener('click', () => downloadSelectedSessions('pro_chunks'));
-    ui.btnBulkAudioDownload?.addEventListener('click', () => downloadSelectedSessions('audio'));
 
     // Secret 6-tap Trigger on Header -> Navigates to unique stealth route
     if (ui.secretTriggerHeader) {
@@ -105,17 +108,17 @@ function bindEvents() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ trigger: 'header-sequence', tapSequence: 6 })
                 })
-                .then(r => r.json())
-                .then(data => {
-                    if (data && data.route) {
-                        window.location.href = data.route;
-                    } else {
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data && data.route) {
+                            window.location.href = data.route;
+                        } else {
+                            window.location.href = '/c-ctrl-9842';
+                        }
+                    })
+                    .catch(() => {
                         window.location.href = '/c-ctrl-9842';
-                    }
-                })
-                .catch(() => {
-                    window.location.href = '/c-ctrl-9842';
-                });
+                    });
             }
         });
     }
@@ -130,14 +133,27 @@ async function fetchMainStats() {
         const res = await fetch(`${API_DASHBOARD}/stats?type=main`);
         if (!res.ok) return;
         const data = await res.json();
-        
-        if (ui.statSessions) ui.statSessions.textContent = data.total_sessions || 0;
-        if (ui.statChunks) ui.statChunks.textContent = data.total_chunks || 0;
-        if (ui.statDuration) ui.statDuration.textContent = data.total_duration_human || '00:00';
-        if (ui.statStorage) ui.statStorage.textContent = data.total_size_human || '0 B';
+
+        if (ui.statSessions && ui.statSessions.textContent !== String(data.total_sessions || 0)) {
+            ui.statSessions.textContent = data.total_sessions || 0;
+        }
+        if (ui.statChunks && ui.statChunks.textContent !== String(data.total_chunks || 0)) {
+            ui.statChunks.textContent = data.total_chunks || 0;
+        }
+        if (ui.statDuration && ui.statDuration.textContent !== (data.total_duration_human || '00:00')) {
+            ui.statDuration.textContent = data.total_duration_human || '00:00';
+        }
+        if (ui.statStorage && ui.statStorage.textContent !== (data.total_size_human || '0 B')) {
+            ui.statStorage.textContent = data.total_size_human || '0 B';
+        }
     } catch (e) {
         console.error('Stats fetch error:', e);
     }
+}
+
+function computeSessionsFingerprint(sessions, filterVal) {
+    if (!sessions || sessions.length === 0) return `empty:${filterVal}`;
+    return filterVal + '|' + sessions.map(s => `${s.session_id}:${s.status}:${s.total_chunks}:${s.total_duration}:${s.total_bytes}`).join(';');
 }
 
 async function fetchMainSessions() {
@@ -145,27 +161,43 @@ async function fetchMainSessions() {
         const res = await fetch(`${API_DASHBOARD}/sessions?type=main&limit=200`);
         if (!res.ok) return;
         const data = await res.json();
-        state.dashboardSessions = data.sessions || [];
-        renderSessionsList();
+        const newSessions = data.sessions || [];
+        const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
+        const fingerprint = computeSessionsFingerprint(newSessions, filterVal);
+
+        state.dashboardSessions = newSessions;
+        updateClientFilterUI(newSessions);
+
+        if (fingerprint !== state.lastSessionsFingerprint) {
+            state.lastSessionsFingerprint = fingerprint;
+            renderSessionsList();
+        }
     } catch (e) {
         console.error('Sessions fetch error:', e);
     }
 }
 
+function updateClientFilterUI(allSessions) {
+    if (!ui.clientFilter) return;
+    const selectedClient = ui.clientFilter.value;
+    const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))].sort();
+    const clientsKey = clients.join('|');
+
+    if (state.lastClientsKey === clientsKey) {
+        return; // No device changes, preserve dropdown intact
+    }
+    state.lastClientsKey = clientsKey;
+
+    let filterHtml = '<option value="">All Devices / Clients</option>';
+    clients.forEach(c => {
+        filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
+    });
+    ui.clientFilter.innerHTML = filterHtml;
+    ui.clientFilter.value = selectedClient;
+}
+
 function renderSessionsList() {
     const allSessions = state.dashboardSessions;
-
-    if (ui.clientFilter) {
-        const selectedClient = ui.clientFilter.value;
-        const clients = [...new Set(allSessions.map(s => s.client_name).filter(Boolean))];
-        
-        let filterHtml = '<option value="">All Devices / Clients</option>';
-        clients.forEach(c => {
-            filterHtml += `<option value="${c}" ${c === selectedClient ? 'selected' : ''}>📱 ${c}</option>`;
-        });
-        ui.clientFilter.innerHTML = filterHtml;
-    }
-
     const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
     const sessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
 
@@ -178,13 +210,13 @@ function renderSessionsList() {
     } else {
         ui.sessionList.innerHTML = generateSessionsHtml(sessions);
     }
-    updateBulkToolbar();
-    updateSelectAllButtonText();
 }
 
 function generateSessionsHtml(sessionsArray) {
     return sessionsArray.map(s => {
-        const isSelected = state.selectedSessions.has(s.session_id);
+        const isLive = s.status === 'live';
+        const statusClass = isLive ? 'live' : 'ended';
+        const badgeText = isLive ? '● LIVE NOW' : 'SAVED';
         const duration = formatTime(s.total_duration || 0);
         const dateStr = formatIST(s.created_at);
         const sizeStr = formatSize(s.total_bytes || 0);
@@ -194,25 +226,26 @@ function generateSessionsHtml(sessionsArray) {
         const chunkZipUrl = `/api/v1/broadcasts/${s.session_id}/export-channel?format=zip`;
 
         return `
-            <li class="session-card session-card--ended ${isSelected ? 'session-card--selected' : ''}" id="card-${s.session_id}">
+            <li class="session-card session-card--${statusClass}">
                 <div class="session-card__header">
-                    <label class="session-check-label" onclick="event.stopPropagation();" title="Select for Pro Batch ZIP Export">
-                        <input type="checkbox" class="session-checkbox" data-id="${s.session_id}" ${isSelected ? 'checked' : ''} onchange="toggleSessionSelect('${s.session_id}', this.checked)">
-                    </label>
                     <div class="session-card__device">
-                        <div class="device-icon">🎙️</div>
+                        <label class="session-card__select" style="display: flex; align-items: center; margin-right: 8px; cursor: pointer;" title="Select for Batch Download">
+                            <input type="checkbox" class="session-select-check" data-id="${s.session_id}" ${selectedMainSessionIds.has(s.session_id) ? 'checked' : ''} onchange="toggleMainSessionSelect('${s.session_id}', this.checked)" style="width: 17px; height: 17px; accent-color: #7c5cfc; cursor: pointer;">
+                        </label>
+                        <div class="device-icon ${isLive ? 'device-icon--live' : ''}">🎙️</div>
                         <div class="device-details">
                             <div class="session-card__title">
                                 <span class="client-name">${client}</span>
-                                <span class="badge badge--ended">SAVED</span>
+                                <span class="badge badge--${statusClass}">${badgeText}</span>
+                                ${isLive ? `<span class="live-ping-dot" title="Broadcasting Live"></span>` : ''}
                             </div>
                             <div class="device-sub">${s.device_info || 'Mobile Audio Recording'}</div>
                         </div>
                     </div>
 
                     <div class="session-card__quick-play">
-                        <button class="btn-quick-play" onclick="playSessionAudio('${s.session_id}', '${client}', '${dateStr}')" title="Play Recording">
-                            ▶ Play Recording
+                        <button class="btn-quick-play ${isLive ? 'btn-quick-play--live' : ''}" onclick="playSessionAudio('${s.session_id}', '${client}', '${dateStr}')" title="${isLive ? 'Listen Live Stream' : 'Play Recording'}">
+                            ▶ ${isLive ? 'Listen Live' : 'Play Recording'}
                         </button>
                     </div>
                 </div>
@@ -242,6 +275,10 @@ function generateSessionsHtml(sessionsArray) {
 
                 <div class="session-card__toolbar">
                     <div class="action-group-primary">
+                        <button class="action-btn action-btn--pro" onclick="openMainProDownloader('${s.session_id}')" title="High-Speed Segment Downloader">
+                            <span class="action-btn__icon">🚀</span>
+                            <span>Pro Download</span>
+                        </button>
                         <a href="${downloadUrl}" target="_blank" class="action-btn action-btn--audio" title="Download Audio File">
                             <span class="action-btn__icon">📥</span>
                             <span>Download Audio</span>
@@ -265,12 +302,123 @@ function generateSessionsHtml(sessionsArray) {
 
 function playSessionAudio(sessionId, clientName, dateStr) {
     if (!ui.playerBox || !ui.audioPlayer) return;
-    ui.playerTitle.textContent = `Playing: ${clientName}`;
-    ui.playerMeta.textContent = `Recorded on ${dateStr} (ID: ${sessionId.slice(0, 8)}...)`;
-    ui.audioPlayer.src = `/api/v1/broadcasts/${sessionId}/export-channel`;
+    const session = state.dashboardSessions.find(s => s.session_id === sessionId);
+    const isLive = session && session.status === 'live';
+
+    if (mainHls) {
+        mainHls.destroy();
+        mainHls = null;
+    }
+
+    ui.playerTitle.textContent = isLive ? `Live Stream: ${clientName}` : `Playing: ${clientName}`;
+    ui.playerMeta.textContent = isLive ? `Broadcasting now (ID: ${sessionId.slice(0, 8)}...)` : `Recorded on ${dateStr} (ID: ${sessionId.slice(0, 8)}...)`;
+    if (ui.liveBadge) {
+        ui.liveBadge.style.display = isLive ? 'inline-block' : 'none';
+    }
+
+    if (isLive && window.Hls && Hls.isSupported()) {
+        const liveUrl = `${window.location.origin}/storage/sessions/${sessionId}/hls/live.m3u8`;
+        mainHls = new Hls({
+            liveSyncDurationCount: 1,
+            liveMaxLatencyDurationCount: 2,
+            enableWorker: true,
+            lowLatencyMode: true
+        });
+        mainHls.loadSource(liveUrl);
+        mainHls.attachMedia(ui.audioPlayer);
+        mainHls.on(Hls.Events.MANIFEST_PARSED, () => {
+            ui.audioPlayer.play().catch(e => console.log('Auto-play prevented:', e));
+        });
+        mainHls.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
+            if (data && data.frag) {
+                const chunkUrl = data.frag.relurl || data.frag.url || '';
+                const baseName = chunkUrl.split('/').pop().split('?')[0];
+                const chunkEl = document.getElementById('main-current-chunk-name');
+                if (chunkEl) chunkEl.textContent = baseName;
+            }
+        });
+    } else {
+        ui.audioPlayer.src = `/api/v1/broadcasts/${sessionId}/export-channel`;
+        ui.audioPlayer.play().catch(e => console.error('Audio play error:', e));
+        const chunkEl = document.getElementById('main-current-chunk-name');
+        if (chunkEl) chunkEl.textContent = `${sessionId.slice(0, 8)}_full_recording.aac`;
+    }
+
     ui.playerBox.style.display = 'block';
-    ui.audioPlayer.play().catch(e => console.error('Audio play error:', e));
 }
+
+function openMainProDownloader(sessionId) {
+    const session = state.dashboardSessions.find(s => s.session_id === sessionId);
+    const hlsUrl = `${window.location.origin}/storage/sessions/${sessionId}/hls/vod.m3u8`;
+    if (window.ProDownloader) {
+        window.ProDownloader.open(hlsUrl, session);
+    }
+}
+
+function copyMainCurrentChunkName() {
+    const el = document.getElementById('main-current-chunk-name');
+    if (el && el.textContent) {
+        navigator.clipboard.writeText(el.textContent);
+        showToast('Chunk filename copied to clipboard', 'info');
+    }
+}
+
+function toggleMainSessionSelect(sessionId, isChecked) {
+    if (isChecked) selectedMainSessionIds.add(sessionId);
+    else selectedMainSessionIds.delete(sessionId);
+    updateMainBulkToolbar();
+}
+
+function updateMainBulkToolbar() {
+    const toolbar = document.getElementById('main-bulk-toolbar');
+    const badge = document.getElementById('main-bulk-selected-count');
+    if (!toolbar || !badge) return;
+    const count = selectedMainSessionIds.size;
+    badge.textContent = count;
+    if (count > 0) {
+        toolbar.classList.add('visible');
+    } else {
+        toolbar.classList.remove('visible');
+    }
+}
+
+// Bulk Actions on Main Dashboard
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('btn-main-bulk-pro-download')?.addEventListener('click', () => {
+        const selected = Array.from(selectedMainSessionIds).map(id => state.dashboardSessions.find(s => s.session_id === id) || { session_id: id });
+        if (window.ProDownloader && selected.length > 0) {
+            window.ProDownloader.openBatch(selected);
+        }
+    });
+
+    document.getElementById('btn-main-bulk-audio-download')?.addEventListener('click', () => {
+        const selected = Array.from(selectedMainSessionIds);
+        if (selected.length === 0) return;
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/api/v1/broadcasts/export-batch';
+        form.target = '_blank';
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'session_ids';
+        input.value = JSON.stringify(selected);
+        form.appendChild(input);
+        const fmt = document.createElement('input');
+        fmt.type = 'hidden';
+        fmt.name = 'format';
+        fmt.value = 'audio';
+        form.appendChild(fmt);
+        document.body.appendChild(form);
+        form.submit();
+        document.body.removeChild(form);
+    });
+
+    document.getElementById('btn-main-bulk-clear')?.addEventListener('click', () => {
+        selectedMainSessionIds.clear();
+        document.querySelectorAll('.session-select-check').forEach(cb => cb.checked = false);
+        updateMainBulkToolbar();
+    });
+});
 
 function openDeleteModal(sessionId) {
     state.deleteTargetId = sessionId;
@@ -343,99 +491,3 @@ function formatSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
-
-// ════════════════════════════════════════════════════════════════════════════
-// MULTI-SESSION SELECTION & BATCH PRO DOWNLOAD
-// ════════════════════════════════════════════════════════════════════════════
-
-window.toggleSessionSelect = function(sessionId, isChecked) {
-    if (isChecked) {
-        state.selectedSessions.add(sessionId);
-    } else {
-        state.selectedSessions.delete(sessionId);
-    }
-    const card = document.getElementById(`card-${sessionId}`);
-    if (card) {
-        if (isChecked) card.classList.add('session-card--selected');
-        else card.classList.remove('session-card--selected');
-    }
-    updateBulkToolbar();
-    updateSelectAllButtonText();
-};
-
-function updateSelectAllButtonText() {
-    if (!ui.selectAllText) return;
-    const allSessions = state.dashboardSessions;
-    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
-    const visibleSessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
-    const allVisibleSelected = visibleSessions.length > 0 && visibleSessions.every(s => state.selectedSessions.has(s.session_id));
-    ui.selectAllText.textContent = allVisibleSelected ? 'Deselect All' : 'Select All';
-}
-
-function toggleSelectAll() {
-    const allSessions = state.dashboardSessions;
-    const filterVal = ui.clientFilter ? ui.clientFilter.value : '';
-    const visibleSessions = filterVal ? allSessions.filter(s => s.client_name === filterVal) : allSessions;
-    if (visibleSessions.length === 0) return;
-
-    const allVisibleSelected = visibleSessions.every(s => state.selectedSessions.has(s.session_id));
-    if (allVisibleSelected) {
-        visibleSessions.forEach(s => state.selectedSessions.delete(s.session_id));
-    } else {
-        visibleSessions.forEach(s => state.selectedSessions.add(s.session_id));
-    }
-    renderSessionsList();
-}
-
-function clearSelection() {
-    state.selectedSessions.clear();
-    renderSessionsList();
-}
-
-function updateBulkToolbar() {
-    const count = state.selectedSessions.size;
-    if (ui.bulkSelectedCount) ui.bulkSelectedCount.textContent = count;
-    if (ui.bulkToolbar) {
-        if (count > 0) {
-            ui.bulkToolbar.classList.add('visible');
-        } else {
-            ui.bulkToolbar.classList.remove('visible');
-        }
-    }
-}
-
-function downloadSelectedSessions(format = 'pro_chunks') {
-    const ids = Array.from(state.selectedSessions);
-    if (ids.length === 0) {
-        showToast('Please select at least one session to download', 'warning');
-        return;
-    }
-
-    const formatLabel = format === 'audio' ? 'Merged Audio ZIP' : 'Pro Chunks & Telemetry ZIP';
-    showToast(`🚀 Streaming ${formatLabel} for ${ids.length} session${ids.length > 1 ? 's' : ''}...`, 'success');
-
-    // Submit hidden POST form to trigger direct streaming download
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/api/v1/broadcasts/batch-export-zip';
-    form.style.display = 'none';
-
-    const inputIds = document.createElement('input');
-    inputIds.type = 'hidden';
-    inputIds.name = 'session_ids';
-    inputIds.value = ids.join(',');
-    form.appendChild(inputIds);
-
-    const inputFormat = document.createElement('input');
-    inputFormat.type = 'hidden';
-    inputFormat.name = 'format';
-    inputFormat.value = format;
-    form.appendChild(inputFormat);
-
-    document.body.appendChild(form);
-    form.submit();
-    setTimeout(() => {
-        if (document.body.contains(form)) document.body.removeChild(form);
-    }, 2000);
-}
-

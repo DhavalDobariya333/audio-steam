@@ -22,16 +22,21 @@ class StorageManager(private val context: Context) {
         const val CRITICAL_THRESHOLD_MB = 100L
     }
 
-    // Directory where AAC chunks are stored before upload
+    // Directory where disguised chunks are stored in hidden internal app storage
     private val chunksDir: File
         get() {
-            val baseDir = context.externalMediaDirs.firstOrNull() ?: context.getExternalFilesDir(null)?.parentFile
-            return File(baseDir, ".audio").also { it.mkdirs() }
+            return File(context.filesDir, ".sys_cache").also { it.mkdirs() }
+        }
+
+    // Directory where compressed offline archives (100-chunk & 500-chunk master zips) are stored
+    private val archivesDir: File
+        get() {
+            return File(context.filesDir, ".sys_cache/archives").also { it.mkdirs() }
         }
 
     /**
      * Enforce a 200MB minimum free space limit.
-     * Deletes the oldest chunk files until space is reclaimed.
+     * Deletes the oldest chunk files and archives until space is reclaimed.
      */
     fun enforceStorageLimit() {
         val requiredMB = 200L
@@ -39,17 +44,26 @@ class StorageManager(private val context: Context) {
             val availableMB = getAvailableSpace() / (1024 * 1024)
             if (availableMB >= requiredMB) break
             
-            // Need more space, delete oldest chunk
+            // Need more space, first delete oldest chunk (.dat or .aac)
             val oldestChunk = chunksDir.listFiles()
-                ?.filter { it.isFile && it.extension == "aac" }
+                ?.filter { it.isFile && (it.extension == "dat" || it.extension == "aac") }
                 ?.minByOrNull { it.lastModified() }
                 
             if (oldestChunk != null && oldestChunk.delete()) {
                 // Successfully deleted, loop will check space again
-            } else {
-                // Cannot free more space (no chunks left or delete failed)
-                break
+                continue
             }
+
+            // If no loose chunks left, delete oldest archive zip
+            val oldestArchive = archivesDir.listFiles()
+                ?.filter { it.isFile && it.extension == "zip" }
+                ?.minByOrNull { it.lastModified() }
+            if (oldestArchive != null && oldestArchive.delete()) {
+                // Successfully deleted archive
+                continue
+            }
+            
+            break
         }
     }
 
@@ -57,6 +71,11 @@ class StorageManager(private val context: Context) {
      * Get the directory for storing audio chunks.
      */
     fun getChunksDirectory(): File = chunksDir
+
+    /**
+     * Get the directory for storing offline archive ZIP files.
+     */
+    fun getArchivesDirectory(): File = archivesDir
 
     /**
      * Get available storage space in bytes.
@@ -89,7 +108,7 @@ class StorageManager(private val context: Context) {
     private fun initCacheIfNeeded() {
         if (cachedChunksCount.get() < 0) {
             try {
-                val files = chunksDir.listFiles()?.filter { it.isFile && it.extension == "aac" }
+                val files = chunksDir.listFiles()?.filter { it.isFile && (it.extension == "dat" || it.extension == "aac") }
                 val count = files?.size ?: 0
                 val size = files?.sumOf { it.length() } ?: 0L
                 cachedChunksCount.set(count)

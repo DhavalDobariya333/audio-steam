@@ -52,6 +52,17 @@ class ConnectionMonitor(
         private const val HEALTH_TIMEOUT_MS = 10_000L      // 10 second timeout
     }
 
+    @Volatile
+    private var currentServerUrl: String = serverUrl
+
+    fun updateServerUrl(newUrl: String) {
+        val trimmed = newUrl.trim()
+        if (trimmed.isNotEmpty()) {
+            currentServerUrl = trimmed
+            onLog("ConnectionMonitor server URL updated to: $trimmed")
+        }
+    }
+
     private val heartbeatExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     // Current state
@@ -212,7 +223,7 @@ class ConnectionMonitor(
         if (!isMonitoring) return false
 
         return try {
-            val healthUrl = serverUrl.trimEnd('/') + "/api/v1/health"
+            val healthUrl = currentServerUrl.trimEnd('/') + "/api/v1/health"
             val request = Request.Builder()
                 .url(healthUrl)
                 .get()

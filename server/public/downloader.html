@@ -391,13 +391,16 @@
     window.onload = () => {
         loadHistory();
         
-        // Query params logic (Auto Start)
+        // Query params logic (Auto Load & Auto Start)
         const urlParams = new URLSearchParams(window.location.search);
-        const autoUrl = urlParams.get('url');
-        if (autoUrl) el.urlInput.value = autoUrl;
+        const autoUrl = urlParams.get('url') || urlParams.get('stream');
+        if (autoUrl) {
+            el.urlInput.value = autoUrl;
+            setTimeout(loadChunks, 100);
+        }
         
         if (urlParams.get('autoStart') === 'true' && autoUrl) {
-            setTimeout(startDownload, 100);
+            setTimeout(startDownload, 250);
         }
     };
 

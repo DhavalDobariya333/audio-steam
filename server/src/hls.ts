@@ -50,6 +50,24 @@ type Task = () => Promise<void>;
 const hlsQueues = new Map<string, Task[]>();
 const isProcessing = new Set<string>();
 
+// Active listener tracking: maps sessionId -> lastRequestTimestampMs
+const activeListeners = new Map<string, number>();
+const LISTENER_ACTIVE_WINDOW_MS = 60 * 1000; // 60 seconds
+
+export function recordHlsListener(sessionId: string): void {
+    activeListeners.set(sessionId, Date.now());
+}
+
+export function hasActiveHlsListener(sessionId: string): boolean {
+    const lastActive = activeListeners.get(sessionId);
+    if (!lastActive) return false;
+    if (Date.now() - lastActive > LISTENER_ACTIVE_WINDOW_MS) {
+        activeListeners.delete(sessionId);
+        return false;
+    }
+    return true;
+}
+
 // Track sequence numbers per session to detect silence/drops for #EXT-X-DISCONTINUITY
 const lastSequenceNums = new Map<string, number>();
 

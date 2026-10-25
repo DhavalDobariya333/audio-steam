@@ -29,7 +29,7 @@ object RemoteConfigManager {
 
     const val DEFAULT_SERVER_URL = "https://audio-steam-server.onrender.com"
     const val DEFAULT_SILENCE_THRESHOLD_DB = -50.0
-    const val DEFAULT_CHUNK_DURATION_SEC = 10
+    const val DEFAULT_CHUNK_DURATION_SEC = 2
     const val DEFAULT_IS_ECO_MODE = false
 
     fun getLiveConfig(context: Context): RemoteConfig {
@@ -72,8 +72,8 @@ object RemoteConfigManager {
 
         if (json.has("chunk_duration_sec")) {
             val sec = json.optInt("chunk_duration_sec", DEFAULT_CHUNK_DURATION_SEC)
-            // Clamp between 3 and 60 seconds
-            val clamped = sec.coerceIn(3, 60)
+            // Clamp between 2 and 60 seconds (2s matches YouTube low-latency HLS)
+            val clamped = sec.coerceIn(2, 60)
             editor.putInt(KEY_CHUNK_DURATION_SEC, clamped)
         }
 

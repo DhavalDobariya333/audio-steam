@@ -24,7 +24,7 @@ import {
 } from './auth';
 import { initDatabase, closeDatabase, cleanupStaleSessions } from './database';
 import { ensureStorageRoot } from './storage';
-import { checkFfmpeg, finalizeHLS } from './hls';
+import { checkFfmpeg, finalizeHLS, recordHlsListener } from './hls';
 import broadcastRoutes from './routes/broadcast';
 import dashboardRoutes from './routes/dashboard';
 import listenRoutes from './routes/listen';
@@ -128,7 +128,13 @@ app.get('/up', (_req, res) => {
 // HLS segments & raw chunks — served from /storage/sessions/:id/hls/
 // This lets listeners access: /storage/sessions/:id/hls/live.m3u8
 fs.mkdirSync(STORAGE_ROOT, { recursive: true });
-app.use('/storage', express.static(path.join(PUBLIC_DIR, 'storage'), {
+app.use('/storage', (req, _res, next) => {
+    const match = req.path.match(/^\/sessions\/([^\/]+)\/hls\//);
+    if (match) {
+        recordHlsListener(match[1]);
+    }
+    next();
+}, express.static(path.join(PUBLIC_DIR, 'storage'), {
     // Set proper MIME types for HLS
     setHeaders: (res, filePath) => {
         if (filePath.endsWith('.m3u8')) {
