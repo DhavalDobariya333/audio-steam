@@ -80,10 +80,22 @@
                     </div>
                 </div>
 
-                <div class="filter-box" style="margin-bottom: 16px;">
+                <div class="filter-box" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                     <select id="client-filter" class="select-field select-field--sm">
                         <option value="">All Devices / Clients</option>
                     </select>
+
+                    <!-- Dynamic Latency Controller -->
+                    <div id="main-latency-control" style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.78rem; color: var(--text-muted); font-weight: 500;">⏱️ Stream Latency:</span>
+                        <div class="latency-pill-group" style="display: inline-flex; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 2px;">
+                            <button class="main-latency-pill active" data-seconds="2" title="Ultra-Low: 2s (Real-time live listening)">2s</button>
+                            <button class="main-latency-pill" data-seconds="3" title="Fast: 3s">3s</button>
+                            <button class="main-latency-pill" data-seconds="5" title="Balanced: 5s (Optimal live audio & 60% less battery)">5s</button>
+                            <button class="main-latency-pill" data-seconds="10" title="Battery Saver: 10s (80% less battery & network)">10s</button>
+                            <button class="main-latency-pill" data-seconds="30" title="Archive: 30s">30s</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Active Recording & Live Listening Player Box -->
@@ -103,16 +115,6 @@
                     </div>
                     <audio id="main-audio-player" controls
                         style="width: 100%; border-radius: 8px; outline: none;"></audio>
-
-                    <!-- Currently Playing Chunk Inspector Box -->
-                    <div id="main-chunk-inspector-box"
-                        style="margin-top: 12px; background: rgba(10, 10, 18, 0.85); border: 1px solid rgba(124, 92, 252, 0.35); border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-                        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-                            <span style="font-size: 0.75rem; color: #a78bfa; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;">📦 Playing Chunk:</span>
-                            <code id="main-current-chunk-name" style="font-family: 'SF Mono', Consolas, monospace; font-size: 0.8rem; color: #34d399; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">chunk_waiting_for_playback...</code>
-                        </div>
-                        <button id="btn-copy-main-chunk" onclick="copyMainCurrentChunkName()" title="Copy chunk filename" style="background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.12); color: #d1d5db; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer; white-space: nowrap;">📋 Copy</button>
-                    </div>
                 </div>
 
                 <div class="session-list-container">

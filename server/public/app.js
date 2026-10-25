@@ -48,13 +48,12 @@ const ui = {
     // Secret Trigger to open /hidden
     secretTriggerHeader: document.getElementById('secret-trigger-header'),
     liveBadge: document.getElementById('main-live-badge'),
-    chunkInspectorBox: document.getElementById('main-chunk-inspector-box'),
-    currentChunkName: document.getElementById('main-current-chunk-name'),
 };
 
 document.addEventListener('DOMContentLoaded', () => {
     bindEvents();
     fetchMainData();
+    initMainLatencyControls();
     setInterval(fetchMainData, POLL_INTERVAL);
 });
 
@@ -329,19 +328,9 @@ function playSessionAudio(sessionId, clientName, dateStr) {
         mainHls.on(Hls.Events.MANIFEST_PARSED, () => {
             ui.audioPlayer.play().catch(e => console.log('Auto-play prevented:', e));
         });
-        mainHls.on(Hls.Events.FRAG_CHANGED, (_event, data) => {
-            if (data && data.frag) {
-                const chunkUrl = data.frag.relurl || data.frag.url || '';
-                const baseName = chunkUrl.split('/').pop().split('?')[0];
-                const chunkEl = document.getElementById('main-current-chunk-name');
-                if (chunkEl) chunkEl.textContent = baseName;
-            }
-        });
     } else {
         ui.audioPlayer.src = `/api/v1/broadcasts/${sessionId}/export-channel`;
         ui.audioPlayer.play().catch(e => console.error('Audio play error:', e));
-        const chunkEl = document.getElementById('main-current-chunk-name');
-        if (chunkEl) chunkEl.textContent = `${sessionId.slice(0, 8)}_full_recording.aac`;
     }
 
     ui.playerBox.style.display = 'block';
@@ -355,11 +344,58 @@ function openMainProDownloader(sessionId) {
     }
 }
 
-function copyMainCurrentChunkName() {
-    const el = document.getElementById('main-current-chunk-name');
-    if (el && el.textContent) {
-        navigator.clipboard.writeText(el.textContent);
-        showToast('Chunk filename copied to clipboard', 'info');
+// ── Dynamic Latency Controls ──
+async function initMainLatencyControls() {
+    const pills = document.querySelectorAll('.main-latency-pill');
+    if (!pills.length) return;
+
+    pills.forEach(pill => {
+        pill.addEventListener('click', () => {
+            const sec = parseInt(pill.dataset.seconds, 10);
+            if (sec) setMainStreamLatency(sec);
+        });
+    });
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/config');
+        if (res.ok) {
+            const data = await res.json();
+            const activeSec = data.config?.chunk_duration_sec || 2;
+            updateMainLatencyUI(activeSec);
+        }
+    } catch (_) { }
+}
+
+function updateMainLatencyUI(sec) {
+    const pills = document.querySelectorAll('.main-latency-pill');
+    pills.forEach(p => {
+        if (parseInt(p.dataset.seconds, 10) === sec) {
+            p.classList.add('active');
+        } else {
+            p.classList.remove('active');
+        }
+    });
+}
+
+async function setMainStreamLatency(seconds) {
+    updateMainLatencyUI(seconds);
+    try {
+        const res = await fetch('/api/v1/broadcasts/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                config: { chunk_duration_sec: seconds }
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            showToast(`⏱️ Stream latency set to ${seconds}s (Pipeline re-synced)`, 'success');
+        } else {
+            showToast('Failed to update latency', 'error');
+        }
+    } catch (e) {
+        console.error('Latency update error:', e);
+        showToast('Error updating latency', 'error');
     }
 }
 

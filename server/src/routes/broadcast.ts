@@ -889,14 +889,33 @@ router.post('/eco-mode', (req: Request, res: Response) => {
 router.post('/config', (req: Request, res: Response) => {
     try {
         const { client_id, config } = req.body;
-        if (!client_id || !config) {
-            res.status(400).json({ status: 'error', message: 'Missing client_id or config' });
+        if (!config) {
+            res.status(400).json({ status: 'error', message: 'Missing config' });
             return;
         }
-        db.saveDeviceConfig(client_id, config);
-        const pushed = sendDeviceCommand(client_id, 'UPDATE_CONFIG', { config });
-        console.log(`[broadcast] Remote config saved & pushed for ${client_id} - pushed: ${pushed}`);
-        res.json({ status: 'success', client_id, config, delivered_via_socket: pushed });
+        const targetClientId = client_id || db.getAllDeviceCommands()[0]?.client_id || 'Realme-RMX2040';
+        const existingConfig = db.getDeviceConfig(targetClientId) || {};
+        const mergedConfig = { ...existingConfig, ...config };
+        db.saveDeviceConfig(targetClientId, mergedConfig);
+
+        const pushed = sendDeviceCommand(targetClientId, 'UPDATE_CONFIG', { config: mergedConfig });
+        console.log(`[broadcast] Remote config saved & pushed for ${targetClientId} - pushed: ${pushed}`);
+
+        // If chunk duration changed, trigger instant capture re-initialization so it takes effect on the mic immediately
+        if (config.chunk_duration_sec) {
+            setTimeout(() => {
+                sendDeviceCommand(targetClientId, 'RESTART_CAPTURE');
+                console.log(`[broadcast] Sent RESTART_CAPTURE to ${targetClientId} for ${config.chunk_duration_sec}s latency update`);
+            }, 300);
+        }
+
+        broadcastLiveEvent({
+            type: 'config_updated',
+            client_id: targetClientId,
+            config: mergedConfig,
+        });
+
+        res.json({ status: 'success', client_id: targetClientId, config: mergedConfig, delivered_via_socket: pushed });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -905,12 +924,8 @@ router.post('/config', (req: Request, res: Response) => {
 // Retrieve saved remote configuration
 router.get('/config', (req: Request, res: Response) => {
     try {
-        const client_id = req.query.client_id as string;
-        if (!client_id) {
-            res.status(400).json({ status: 'error', message: 'Missing client_id' });
-            return;
-        }
-        const config = db.getDeviceConfig(client_id);
+        const client_id = (req.query.client_id as string) || db.getAllDeviceCommands()[0]?.client_id || 'Realme-RMX2040';
+        const config = db.getDeviceConfig(client_id) || { chunk_duration_sec: 2 };
         res.json({ status: 'success', client_id, config });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });

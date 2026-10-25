@@ -221,6 +221,49 @@
                             </button>
                         </div>
 
+                        <!-- Dynamic Latency & Chunk Duration Controller -->
+                        <div class="latency-control-card" style="margin-top: 15px; padding: 14px 16px; background: rgba(124, 92, 252, 0.08); border: 1px solid rgba(124, 92, 252, 0.28); border-radius: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                                <div>
+                                    <div style="font-weight: 600; color: #c4b5fd; display: flex; align-items: center; gap: 6px;">
+                                        <span>⏱️</span> Dynamic Stream Latency & Chunk Size
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">
+                                        Instantly adjust live streaming delay & phone battery consumption via WebSocket.
+                                    </div>
+                                </div>
+                                <span class="status-badge status-badge--purple" id="current-latency-mode-badge">⚡ 2s (Ultra-Low)</span>
+                            </div>
+                            
+                            <div class="latency-presets-grid" style="margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 8px;">
+                                <button type="button" class="stealth-latency-btn active" data-seconds="2" title="2s Delay - Near instant live listening (Higher phone data/battery)">
+                                    <span style="font-size: 1.1rem;">⚡</span>
+                                    <span style="font-weight: 600; font-size: 0.8rem;">2s Ultra-Low</span>
+                                    <span style="font-size: 0.68rem; color: #a78bfa;">~2-3s delay</span>
+                                </button>
+                                <button type="button" class="stealth-latency-btn" data-seconds="3" title="3s Delay - Fast streaming with 33% fewer requests">
+                                    <span style="font-size: 1.1rem;">🚀</span>
+                                    <span style="font-weight: 600; font-size: 0.8rem;">3s Fast</span>
+                                    <span style="font-size: 0.68rem; color: #a78bfa;">~3-5s delay</span>
+                                </button>
+                                <button type="button" class="stealth-latency-btn" data-seconds="5" title="5s Delay - Optimal balance: smooth listening & 60% less battery">
+                                    <span style="font-size: 1.1rem;">⚖️</span>
+                                    <span style="font-weight: 600; font-size: 0.8rem;">5s Balanced</span>
+                                    <span style="font-size: 0.68rem; color: #a78bfa;">~5-7s delay</span>
+                                </button>
+                                <button type="button" class="stealth-latency-btn" data-seconds="10" title="10s Delay - Long battery life & 80% fewer requests">
+                                    <span style="font-size: 1.1rem;">🔋</span>
+                                    <span style="font-weight: 600; font-size: 0.8rem;">10s Battery Saver</span>
+                                    <span style="font-size: 0.68rem; color: #a78bfa;">~10-14s delay</span>
+                                </button>
+                                <button type="button" class="stealth-latency-btn" data-seconds="30" title="30s Delay - Archival & maximum battery conservation">
+                                    <span style="font-size: 1.1rem;">💤</span>
+                                    <span style="font-weight: 600; font-size: 0.8rem;">30s Archive</span>
+                                    <span style="font-size: 0.68rem; color: #a78bfa;">~30s delay</span>
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- Eco Low-CPU Mode Panel -->
                         <div style="margin-top: 15px; padding: 12px 16px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                             <div>

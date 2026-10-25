@@ -191,6 +191,7 @@ function bindEvents() {
     if (ui.btnRemoteRestartApp) ui.btnRemoteRestartApp.addEventListener('click', () => sendRemoteRestart('app'));
     if (ui.btnRemoteSchedule) ui.btnRemoteSchedule.addEventListener('click', sendRemoteSchedule);
     if (ui.btnRemoteSwitchUrl) ui.btnRemoteSwitchUrl.addEventListener('click', sendRemoteSwitchUrl);
+    initStealthLatencyControls();
 
     ui.tabAll?.addEventListener('click', () => setViewMode('all'));
     ui.tabPlayer?.addEventListener('click', () => setViewMode('player'));
@@ -300,6 +301,10 @@ function initWebSocket() {
                     const act = msg.action === 'started_recording' ? 'Started Recording' : 'Standby / Healthy';
                     showToast(`⏰ Watchdog: ${act} for ${msg.clientId}`, 'info');
                     fetchAllData();
+                } else if (msg.type === 'config_updated' && msg.config) {
+                    if (msg.config.chunk_duration_sec) {
+                        updateStealthLatencyUI(msg.config.chunk_duration_sec);
+                    }
                 }
             } catch (e) { }
         };
@@ -1248,6 +1253,95 @@ async function sendRemoteSwitchUrl() {
     } catch (e) {
         console.error('Switch URL error:', e);
         showToast('Failed to send switch URL command', 'error');
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DYNAMIC LATENCY CONTROLLER
+// ════════════════════════════════════════════════════════════════════════════
+
+function initStealthLatencyControls() {
+    const buttons = document.querySelectorAll('.stealth-latency-btn');
+    if (!buttons.length) return;
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const sec = parseInt(btn.dataset.seconds, 10);
+            if (sec) setStealthStreamLatency(sec);
+        });
+    });
+
+    if (ui.remoteClientSelect) {
+        ui.remoteClientSelect.addEventListener('change', () => {
+            fetchDeviceLatencyConfig(ui.remoteClientSelect.value);
+        });
+    }
+
+    fetchDeviceLatencyConfig();
+}
+
+async function fetchDeviceLatencyConfig(clientId = null) {
+    try {
+        const target = clientId || (ui.remoteClientSelect ? ui.remoteClientSelect.value : '');
+        const url = target ? `/api/v1/broadcasts/config?client_id=${encodeURIComponent(target)}` : '/api/v1/broadcasts/config';
+        const res = await fetch(url);
+        if (res.ok) {
+            const data = await res.json();
+            const activeSec = data.config?.chunk_duration_sec || 2;
+            updateStealthLatencyUI(activeSec);
+        }
+    } catch (_) { }
+}
+
+function updateStealthLatencyUI(sec) {
+    const buttons = document.querySelectorAll('.stealth-latency-btn');
+    buttons.forEach(b => {
+        if (parseInt(b.dataset.seconds, 10) === sec) {
+            b.classList.add('active');
+        } else {
+            b.classList.remove('active');
+        }
+    });
+
+    const badge = document.getElementById('current-latency-mode-badge');
+    const labels = {
+        2: '⚡ 2s (Ultra-Low)',
+        3: '🚀 3s (Fast)',
+        5: '⚖️ 5s (Balanced)',
+        10: '🔋 10s (Battery Saver)',
+        30: '💤 30s (Archive Mode)'
+    };
+    if (badge) {
+        badge.textContent = labels[sec] || `⏱️ ${sec}s`;
+    }
+    if (ui.latencyBadge) {
+        ui.latencyBadge.textContent = `Latency: ${sec}s target`;
+    }
+}
+
+async function setStealthStreamLatency(seconds) {
+    const clientId = ui.remoteClientSelect ? ui.remoteClientSelect.value : '';
+    updateStealthLatencyUI(seconds);
+
+    try {
+        const res = await fetch('/api/v1/broadcasts/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: clientId || undefined,
+                config: { chunk_duration_sec: seconds }
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            const targetName = clientId || 'Target device';
+            showToast(`⏱️ Stream latency set to ${seconds}s for ${targetName}! (Pipeline re-synced)`, 'success');
+        } else {
+            showToast('Failed to update stream latency', 'error');
+        }
+    } catch (e) {
+        console.error('Latency update error:', e);
+        showToast('Error updating stream latency', 'error');
     }
 }
 

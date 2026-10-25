@@ -1379,3 +1379,61 @@ body {
     }
 }
 
+/* ── Dynamic Latency Pills ── */
+.main-latency-pill {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    padding: 3px 9px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.main-latency-pill:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.main-latency-pill.active {
+    background: #7c5cfc;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(124, 92, 252, 0.4);
+}
+
+/* ── Stealth Dynamic Latency Preset Buttons ── */
+.stealth-latency-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 8px 6px;
+    color: #e2e8f0;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: inherit;
+}
+
+.stealth-latency-btn:hover {
+    background: rgba(124, 92, 252, 0.15);
+    border-color: rgba(124, 92, 252, 0.4);
+    transform: translateY(-1px);
+}
+
+.stealth-latency-btn.active {
+    background: rgba(124, 92, 252, 0.25);
+    border-color: #8b5cf6;
+    color: #ffffff;
+    box-shadow: 0 0 12px rgba(139, 92, 246, 0.3);
+}
+
+.stealth-latency-btn.active span:last-child {
+    color: #ddd6fe !important;
+}
+
