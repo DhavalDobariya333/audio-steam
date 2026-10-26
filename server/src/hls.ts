@@ -9,18 +9,14 @@
  *   5. Avoids spawning ffprobe per chunk when duration_ms is provided by the client
  */
 
-import { exec, spawn } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import util from 'util';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { getHlsDir } from './storage';
 import { HLS_SEGMENT_DURATION, HLS_LIST_SIZE } from './config';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
-const FFMPEG_PATH = ffmpegInstaller.path;
-const FFPROBE_PATH = ffprobeInstaller.path;
 const execAsync = util.promisify(exec);
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -28,18 +24,81 @@ const execAsync = util.promisify(exec);
 // ════════════════════════════════════════════════════════════════════════════
 
 let ffmpegAvailable = false;
+let FFMPEG_PATH = '';
+let FFPROBE_PATH = '';
 
-export function checkFfmpeg(): boolean {
+/** Verify a binary actually executes (exit code 0 on -version). */
+function canRun(bin: string): boolean {
     try {
-        exec(`"${FFMPEG_PATH}" -version`);
-        ffmpegAvailable = true;
-        console.log('[hls] FFmpeg found via static binary');
+        execSync(`"${bin}" -version`, { stdio: 'ignore', timeout: 15000 });
         return true;
-    } catch (e) {
-        ffmpegAvailable = false;
-        console.error('[hls] FFmpeg static binary failed to run:', e);
+    } catch {
         return false;
     }
+}
+
+/**
+ * Resolve a working ffmpeg/ffprobe binary.
+ *
+ * Order:
+ *   1. npm @ffmpeg-installer / @ffprobe-installer bundled static binary
+ *   2. System binary installed by the Dockerfile (apt-get install -y ffmpeg)
+ *   3. Whatever is on PATH
+ *
+ * Each candidate is ACTUALLY EXECUTED with `-version` before being accepted.
+ * This fixes the previous bug where checkFfmpeg() fired exec() fire-and-forget
+ * and reported ffmpeg as available even when the binary could not run.
+ */
+function resolveMediaBinaries(): void {
+    const ffmpegCandidates: string[] = [];
+    const ffprobeCandidates: string[] = [];
+
+    try {
+        const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+        if (ffmpegInstaller?.path) ffmpegCandidates.push(ffmpegInstaller.path);
+    } catch { /* npm installer not installed */ }
+    try {
+        const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
+        if (ffprobeInstaller?.path) ffprobeCandidates.push(ffprobeInstaller.path);
+    } catch { /* npm installer not installed */ }
+
+    for (const dir of ['/usr/bin', '/usr/local/bin']) {
+        ffmpegCandidates.push(path.join(dir, 'ffmpeg'));
+        ffprobeCandidates.push(path.join(dir, 'ffprobe'));
+    }
+    ffmpegCandidates.push('ffmpeg');
+    ffprobeCandidates.push('ffprobe');
+
+    for (const candidate of ffmpegCandidates) {
+        if (canRun(candidate)) {
+            FFMPEG_PATH = candidate;
+            console.log(`[hls] FFmpeg resolved and verified: ${candidate}`);
+            break;
+        }
+        console.warn(`[hls] FFmpeg candidate failed to run: ${candidate}`);
+    }
+
+    for (const candidate of ffprobeCandidates) {
+        if (canRun(candidate)) {
+            FFPROBE_PATH = candidate;
+            console.log(`[hls] FFprobe resolved and verified: ${candidate}`);
+            break;
+        }
+    }
+}
+
+export function checkFfmpeg(): boolean {
+    resolveMediaBinaries();
+    ffmpegAvailable = !!FFMPEG_PATH;
+    if (!ffmpegAvailable) {
+        console.error('[hls] NO working FFmpeg found - HLS generation disabled! Install ffmpeg in the Docker image.');
+    }
+    return ffmpegAvailable;
+}
+
+/** Resolved ffmpeg binary path (usable by other modules, e.g. export-channel). */
+export function getFfmpegPath(): string {
+    return FFMPEG_PATH;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

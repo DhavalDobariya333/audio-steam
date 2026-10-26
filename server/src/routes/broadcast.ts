@@ -18,7 +18,7 @@ import archiver from 'archiver';
 import AdmZip from 'adm-zip';
 import * as db from '../database';
 import * as storage from '../storage';
-import { appendToHLS, finalizeHLS, hasActiveHlsListener } from '../hls';
+import { appendToHLS, finalizeHLS, getFfmpegPath } from '../hls';
 import { sendDeviceCommand, broadcastLiveEvent } from '../websocket';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
@@ -281,12 +281,10 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
 
         console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
 
-        // On-demand HLS: only run FFmpeg if an active listener is streaming
-        if (hasActiveHlsListener(session_id)) {
-            appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
-                console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
-            });
-        }
+        // Generate HLS segment (async — don't block response)
+        appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
+            console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
+        });
 
         res.json({
             status: 'confirmed',
@@ -722,7 +720,12 @@ router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: R
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-        const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+        const ffmpegBin = getFfmpegPath();
+        if (!ffmpegBin) {
+            res.status(503).json({ status: 'error', message: 'FFmpeg is not available on the server. Export disabled.' });
+            return;
+        }
+
         const { spawn } = require('child_process');
 
         const args = ['-i', vodM3u8];
@@ -733,7 +736,7 @@ router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: R
         }
         args.push('pipe:1');
 
-        const proc = spawn(ffmpegInstaller.path, args);
+        const proc = spawn(ffmpegBin, args);
         proc.stdout.pipe(res);
 
         proc.on('error', (err: any) => {

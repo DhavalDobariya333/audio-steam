@@ -89,6 +89,31 @@ function registerDevice(clientId: string, meta: DeviceSocketMeta) {
     } catch { }
 }
 
+function triggerAutoStartIfNeeded(clientId: string, reason: string): void {
+    if (!clientId) return;
+    try {
+        const cmdRecord = db.getDeviceCommand(clientId);
+        if (cmdRecord?.command === 'STOP') {
+            console.log(`[ws] Auto-start skipped for ${clientId} because last operator command was STOP`);
+            return;
+        }
+        if (cmdRecord?.status === 'recording') {
+            return;
+        }
+        console.log(`[ws] ⚡ Auto-initiating live recording for ${clientId} (${reason}) in 1s...`);
+        setTimeout(() => {
+            const freshRecord = db.getDeviceCommand(clientId);
+            if (freshRecord?.command !== 'STOP') {
+                db.setDeviceCommand(clientId, 'START');
+                sendDeviceCommand(clientId, 'START');
+                console.log(`[ws] ⚡ Pushed auto START command to ${clientId}`);
+            }
+        }, 1000);
+    } catch (e) {
+        console.error(`[ws] Error in triggerAutoStartIfNeeded for ${clientId}:`, e);
+    }
+}
+
 function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
     if (!msg || typeof msg !== 'object') return;
 
@@ -119,6 +144,9 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                         }
                     } catch { }
                 }
+
+                // If device connects and isn't stopped, trigger live recording automatically
+                triggerAutoStartIfNeeded(msg.client_id, 'socket_registered');
             }
             break;
         }
@@ -287,6 +315,11 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 is_recording: isRecording,
                 timestamp: new Date().toISOString()
             });
+
+            // Automatically wake device from standby into live recording without touching the phone
+            if (!isRecording && clientId) {
+                triggerAutoStartIfNeeded(clientId, 'standby_online');
+            }
             break;
         }
 
