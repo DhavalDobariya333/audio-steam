@@ -30,6 +30,7 @@ import dashboardRoutes from './routes/dashboard';
 import listenRoutes from './routes/listen';
 import { initWebSocketServer } from './websocket';
 import { initLiveLogCapture, handleLiveLogSse, getRecentEntries, logApi, handleLiveLogDownload } from './livelog';
+import { requestInspector } from './requestdebug';
 
 // Start capturing ALL console output into the live log ring buffer FIRST,
 // so every boot log (ffmpeg resolution, db init, ...) is visible in the
@@ -101,6 +102,15 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ── Request Inspector ──
+// Logs every /api request the MOMENT it arrives (before auth/processing):
+//   [req] → POST /api/v1/broadcasts · ip x.x.x.x · ua okhttp/4.9.3 · ct multipart/form-data · len 1.2MB
+//   [req]   ↳ body {...}          (JSON bodies, secrets masked)
+//   [req]   ↳ parts: audio="..."  (multipart files, after multer parse)
+// Shows exactly what the phone sends — even requests that get rejected.
+// Disable with env DEBUG_REQUESTS=0.
+app.use('/api', requestInspector());
 
 // Live log: record every /api request with its status code and latency.
 // This is what makes the stealth dashboard's Live Logs box able to show

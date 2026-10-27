@@ -11,6 +11,7 @@ import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import url from 'url';
 import * as db from './database';
+import { getClientIp, isRequestDebugEnabled } from './requestdebug';
 
 interface DeviceSocketMeta {
     ws: WebSocket;
@@ -62,7 +63,9 @@ export function initWebSocketServer(server: http.Server): WebSocketServer {
         const parsedUrl = url.parse(req.url || '', true);
         let clientId = (parsedUrl.query.client_id as string) || '';
 
-        console.log(`[ws] New incoming WebSocket connection (query client_id: "${clientId}")`);
+        const wsIp = getClientIp(req as any);
+        const wsUa = String((req.headers && req.headers['user-agent']) || '-').slice(0, 48);
+        console.log(`[ws] New incoming WebSocket connection (query client_id: "${clientId}") · ip ${wsIp} · ua ${wsUa}`);
 
         const meta: DeviceSocketMeta = {
             ws,
@@ -87,6 +90,16 @@ export function initWebSocketServer(server: http.Server): WebSocketServer {
             meta.lastPingAt = new Date();
             try {
                 const message = JSON.parse(data.toString());
+                // RAW DUMP: show the EXACT payload the phone sent (before any
+                // processing) — reveals missing fields (e.g. no audio_db -> mic dead).
+                // pings are skipped: they fire every few seconds and carry no data.
+                if (isRequestDebugEnabled() && message && typeof message === 'object' && message.type !== 'ping') {
+                    try {
+                        const raw = JSON.stringify(message);
+                        const shown = raw.length > 600 ? raw.slice(0, 600) + `…(+${raw.length - 600}ch)` : raw;
+                        console.log(`[ws] ← ${meta.clientId || clientId || '?'}: ${shown}`);
+                    } catch { /* non-serializable message: ignore */ }
+                }
                 handleDeviceMessage(meta, message);
             } catch (err) {
                 console.error('[ws] Error parsing message from device:', err);

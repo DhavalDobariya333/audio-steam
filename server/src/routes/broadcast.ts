@@ -20,6 +20,7 @@ import * as db from '../database';
 import * as storage from '../storage';
 import { appendToHLS, finalizeHLS, hasActiveHlsListener, getFfmpegPath } from '../hls';
 import { sendDeviceCommand, broadcastLiveEvent } from '../websocket';
+import { getClientIp } from '../requestdebug';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
 const router = Router();
@@ -90,12 +91,12 @@ router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Respon
         const file: Express.Multer.File | undefined = files[0] || (req.file as Express.Multer.File | undefined);
 
         if (!file) {
-            console.warn(`[broadcast] Chunk rejected (no file part): session=${session_id} bodyFields=${Object.keys(req.body || {}).join(',')} contentLen=${req.headers['content-length'] || '0'}`);
+            console.warn(`[broadcast] Chunk rejected (no file part): session=${session_id} ip=${getClientIp(req)} bodyFields=${Object.keys(req.body || {}).join(',')} contentLen=${req.headers['content-length'] || '0'}`);
             res.status(400).json({ status: 'error', message: 'No audio file provided' });
             return;
         }
 
-        console.log(`[broadcast] Chunk incoming: session=${session_id} name="${file.originalname}" bytes=${file.size} mimetype=${file.mimetype}`);
+        console.log(`[broadcast] Chunk incoming: session=${session_id} ip=${getClientIp(req)} name="${file.originalname}" bytes=${file.size} mimetype=${file.mimetype}`);
 
         // Verify session exists or auto-recover if missing (e.g. after server restart)
         let session = db.getSession(session_id);
