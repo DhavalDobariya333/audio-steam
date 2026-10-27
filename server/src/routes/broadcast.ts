@@ -18,7 +18,7 @@ import archiver from 'archiver';
 import AdmZip from 'adm-zip';
 import * as db from '../database';
 import * as storage from '../storage';
-import { appendToHLS, finalizeHLS, getFfmpegPath } from '../hls';
+import { appendToHLS, finalizeHLS, hasActiveHlsListener, getFfmpegPath } from '../hls';
 import { sendDeviceCommand, broadcastLiveEvent } from '../websocket';
 import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
@@ -35,6 +35,9 @@ const exportRateLimit = rateLimit({
 });
 
 // Multer: store uploaded chunks in memory (they're small — max 5MB)
+// COMPATIBILITY: use .any() instead of .single('audio') so BOTH old and new
+// APK builds can upload — whichever multipart field name they use (audio,
+// file, chunk, ...) is accepted. The first file part is used as the chunk.
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_UPLOAD_SIZE },
@@ -79,15 +82,20 @@ router.post('/', (req: Request, res: Response) => {
 // UPLOAD CHUNK
 // ════════════════════════════════════════════════════════════════════════════
 
-router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, res: Response) => {
+router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Response) => {
     try {
         const session_id = req.params.session_id as string;
-        const file = req.file;
+        // Old APK: field "audio". New APK: field "audio". Any other name is also accepted.
+        const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
+        const file: Express.Multer.File | undefined = files[0] || (req.file as Express.Multer.File | undefined);
 
         if (!file) {
+            console.warn(`[broadcast] Chunk rejected (no file part): session=${session_id} bodyFields=${Object.keys(req.body || {}).join(',')} contentLen=${req.headers['content-length'] || '0'}`);
             res.status(400).json({ status: 'error', message: 'No audio file provided' });
             return;
         }
+
+        console.log(`[broadcast] Chunk incoming: session=${session_id} name="${file.originalname}" bytes=${file.size} mimetype=${file.mimetype}`);
 
         // Verify session exists or auto-recover if missing (e.g. after server restart)
         let session = db.getSession(session_id);
@@ -279,12 +287,14 @@ router.post('/:session_id/chunk', upload.single('audio'), async (req: Request, r
             }
         }
 
-        console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse}`);
+        console.log(`[broadcast] Chunk saved: session=${session_id} seq=${sequenceNum} call=${inCall} micUse=${micInUse} bytes=${saved.fileSize} file=${saved.filename}`);
 
-        // Generate HLS segment (async — don't block response)
-        appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
-            console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
-        });
+        // On-demand HLS: only run FFmpeg if an active listener is streaming
+        if (hasActiveHlsListener(session_id)) {
+            appendToHLS(session_id, saved.filepath, sequenceNum, clientTimestamp, durationMs).catch(err => {
+                console.error(`[broadcast] HLS generation failed for seq ${sequenceNum}:`, err);
+            });
+        }
 
         res.json({
             status: 'confirmed',
@@ -760,7 +770,7 @@ router.get('/:session_id/export-channel', exportRateLimit, (req: Request, res: R
 // END SESSION
 // ════════════════════════════════════════════════════════════════════════════
 
-router.put('/:session_id/end', (req: Request, res: Response) => {
+function endSessionHandler(req: Request, res: Response) {
     try {
         const session_id = req.params.session_id as string;
 
@@ -784,7 +794,11 @@ router.put('/:session_id/end', (req: Request, res: Response) => {
         console.error('[broadcast] End session error:', err);
         res.status(500).json({ status: 'error', message: err.message });
     }
-});
+}
+
+// COMPATIBILITY: accept both PUT (standard) and POST (some APK builds) for ending a session.
+router.put('/:session_id/end', endSessionHandler);
+router.post('/:session_id/end', endSessionHandler);
 
 router.put('/:session_id/activate', (req: Request, res: Response) => {
     try {
@@ -1136,6 +1150,25 @@ router.get('/:session_id', (req: Request, res: Response) => {
         });
     } catch (err: any) {
         res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ROUTER-LEVEL ERROR HANDLER
+// Catches multer errors (e.g. LIMIT_UNEXPECTED_FILE, file too large) and any
+// other route error, logs them to the Live Server Logs stream, and always
+// answers JSON so APK clients never get an HTML error page.
+// ════════════════════════════════════════════════════════════════════════════
+
+router.use((err: any, req: Request, res: Response, _next: any) => {
+    if (err && (err instanceof multer.MulterError || err?.name === 'MulterError')) {
+        console.warn(`[broadcast] Upload rejected (multer): ${err.code || err.message} field=${(err as any).field || '?'} session=${(req.params as any)?.session_id || '?'} url=${req.originalUrl}`);
+        res.status(400).json({ status: 'error', message: `Upload rejected: ${err.code || err.message}` });
+        return;
+    }
+    console.error('[broadcast] Unhandled route error:', err);
+    if (!res.headersSent) {
+        res.status(500).json({ status: 'error', message: err?.message || 'Internal error' });
     }
 });
 

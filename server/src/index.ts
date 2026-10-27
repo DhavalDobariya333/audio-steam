@@ -29,6 +29,12 @@ import broadcastRoutes from './routes/broadcast';
 import dashboardRoutes from './routes/dashboard';
 import listenRoutes from './routes/listen';
 import { initWebSocketServer } from './websocket';
+import { initLiveLogCapture, handleLiveLogSse, getRecentEntries, logApi } from './livelog';
+
+// Start capturing ALL console output into the live log ring buffer FIRST,
+// so every boot log (ffmpeg resolution, db init, ...) is visible in the
+// stealth dashboard's Live Server Logs box.
+initLiveLogCapture();
 
 // ════════════════════════════════════════════════════════════════════════════
 // APPLICATION SETUP
@@ -95,6 +101,23 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Live log: record every /api request with its status code and latency.
+// This is what makes the stealth dashboard's Live Logs box able to show
+// EXACTLY what each phone/APK sends and how the server answers (401/404/etc).
+app.use('/api', (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const startedAt = Date.now();
+    res.on('finish', () => {
+        try {
+            // Skip ultra-noisy polling endpoints from the log stream
+            const p = req.originalUrl.split('?')[0];
+            if (p === '/api/v1/health' || p === '/api/v1/auth/session') return;
+            logApi(req.method, req.originalUrl, res.statusCode, Date.now() - startedAt);
+        } catch { /* never break requests because of logging */ }
+    });
+    next();
+});
+
 app.use(authMiddleware);
 
 // ── Auth Endpoints ──
@@ -185,6 +208,21 @@ app.get([STEALTH_ROUTE, `${STEALTH_ROUTE}/`], (req, res) => {
         .replace(/__STEALTH_ROUTE__/g, STEALTH_ROUTE);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
+});
+
+// Live Server Logs (stealth-only): SSE stream + recent snapshot
+app.get(`${STEALTH_ROUTE}/live-logs`, (req, res) => {
+    if (req.userRole !== 'stealth') {
+        return res.status(404).send('Not found');
+    }
+    handleLiveLogSse(req, res);
+});
+
+app.get(`${STEALTH_ROUTE}/live-logs/recent`, (req, res) => {
+    if (req.userRole !== 'stealth') {
+        return res.status(404).json({ status: 'error', entries: [] });
+    }
+    res.json({ status: 'ok', entries: getRecentEntries() });
 });
 
 // Direct routes for /, /dashboard, /listener → serve innocent Main SPA

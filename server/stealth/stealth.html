@@ -359,6 +359,36 @@
             </div>
 
         </main>
+
+        <!-- LIVE SERVER LOGS (stealth-only real-time diagnostics) -->
+        <section class="section-card" id="sec-livelogs" style="margin: 0 24px 24px; overflow: hidden;">
+            <div class="card-head">
+                <div class="card-head__info">
+                    <h2 class="card-title" style="color: #7dd3fc;">📜 Live Server Logs</h2>
+                    <div class="card-sub">Real-time device, audio & request activity — see instantly what the phone sends and how the server answers</div>
+                </div>
+                <span class="live-pill" id="livelog-status">CONNECTING</span>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
+                <select id="livelog-filter" class="select-field select-field--sm" style="width: auto; min-width: 170px;">
+                    <option value="all">🔍 Show: Everything</option>
+                    <option value="device">📱 Device & Audio only</option>
+                    <option value="issues">⚠️ Errors & Warnings</option>
+                </select>
+                <button id="livelog-pause" style="background: rgba(125, 211, 252, 0.12); border: 1px solid rgba(125, 211, 252, 0.35); color: #7dd3fc; border-radius: 8px; padding: 7px 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer;">⏸ Pause</button>
+                <button id="livelog-autoscroll" title="Keep view pinned to the newest log line" style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); color: #6ee7b7; border-radius: 8px; padding: 7px 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer;">⬇ Auto-scroll: ON</button>
+                <button id="livelog-clear" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.15); color: #d1d5db; border-radius: 8px; padding: 7px 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer;">🧹 Clear</button>
+                <button id="livelog-collapse" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.15); color: #d1d5db; border-radius: 8px; padding: 7px 14px; font-size: 0.8rem; font-weight: 600; cursor: pointer;">▾ Hide</button>
+                <span id="livelog-count" style="font-size: 0.75rem; color: var(--text-muted); margin-left: auto;">0 lines</span>
+            </div>
+
+            <div id="livelog-box" style="height: 280px; overflow-y: auto; background: #05050c; border: 1px solid rgba(125, 211, 252, 0.22); border-radius: 10px; padding: 10px 12px; font-family: 'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;"></div>
+
+            <div style="margin-top: 8px; font-size: 0.72rem; color: var(--text-muted);">
+                Color legend: <span style="color:#34d399;">■ audio/sessions</span> <span style="color:#a78bfa;">■ websocket/devices</span> <span style="color:#7dd3fc;">■ http requests</span> <span style="color:#fbbf24;">■ hls/ffmpeg</span> <span style="color:#f87171;">■ errors</span> <span style="color:#fbbf24;">■ warnings</span>
+            </div>
+        </section>
     </div>
 
     <!-- Delete Confirmation Modal -->
