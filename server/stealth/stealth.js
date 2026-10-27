@@ -1674,3 +1674,233 @@ function formatSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE SERVER LOGS — real-time SSE log viewer for the stealth dashboard
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LIVELOG_MAX_LINES = 400;
+const liveLogState = {
+    es: null,
+    paused: false,
+    autoScroll: true,
+    filter: 'all',
+    collapsed: false,
+    pending: [],
+    lineCount: 0,
+};
+
+function liveLogApiBase() {
+    // Derive the stealth route from this script's own URL:
+    //   /<stealth-route>/stealth.js  ->  /<stealth-route>/
+    try {
+        const script = document.querySelector('script[src*="stealth.js"]');
+        if (script && script.src) {
+            return script.src.replace(/stealth\.js.*$/, '');
+        }
+    } catch (e) { /* ignore */ }
+    return '/';
+}
+
+function liveLogEscapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function liveLogTagColor(tag, level) {
+    if (level === 'error') return '#f87171';
+    if (level === 'warn') return '#fbbf24';
+    switch (tag) {
+        case 'broadcast': return '#34d399';  // sessions & audio chunks
+        case 'ws': return '#a78bfa';          // websocket / device events
+        case 'api': return '#7dd3fc';         // http requests
+        case 'hls': return '#fbbf24';         // ffmpeg / hls
+        case 'storage': return '#9ca3af';
+        case 'server': return '#9ca3af';
+        default: return '#8b8b9e';
+    }
+}
+
+function liveLogMatchesFilter(entry) {
+    if (liveLogState.filter === 'issues') {
+        return entry.level === 'error' || entry.level === 'warn';
+    }
+    if (liveLogState.filter === 'device') {
+        return ['broadcast', 'ws', 'hls'].includes(entry.tag);
+    }
+    return true;
+}
+
+function liveLogFormatTime(ts) {
+    try {
+        return new Date(ts).toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour12: false,
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+        });
+    } catch (e) {
+        return '';
+    }
+}
+
+function liveLogRenderEntry(entry) {
+    if (!liveLogMatchesFilter(entry)) return null;
+
+    const box = document.getElementById('livelog-box');
+    if (!box) return null;
+
+    const row = document.createElement('div');
+    row.style.borderBottom = '1px solid rgba(255,255,255,0.035)';
+    row.style.padding = '1px 0';
+
+    const tagColor = liveLogTagColor(entry.tag, entry.level);
+    const time = liveLogFormatTime(entry.ts);
+
+    row.innerHTML =
+        `<span style="color:#565672;">${liveLogEscapeHtml(time)}</span>` +
+        `<span style="color:${tagColor}; font-weight:700;"> [${liveLogEscapeHtml(entry.tag)}]</span>` +
+        `<span style="color:${tagColor === '#f87171' ? '#fca5a5' : (tagColor === '#fbbf24' ? '#fde68a' : '#c9c9d9')};"> ${liveLogEscapeHtml(entry.message)}</span>`;
+
+    box.appendChild(row);
+
+    // Cap DOM size
+    while (box.childElementCount > LIVELOG_MAX_LINES) {
+        box.removeChild(box.firstChild);
+    }
+
+    liveLogState.lineCount++;
+    const countEl = document.getElementById('livelog-count');
+    if (countEl) countEl.textContent = `${box.childElementCount} lines`;
+
+    if (liveLogState.autoScroll && !liveLogState.paused) {
+        box.scrollTop = box.scrollHeight;
+    }
+    return row;
+}
+
+function liveLogFlushPending() {
+    if (liveLogState.pending.length === 0) return;
+    const items = liveLogState.pending.splice(0, liveLogState.pending.length);
+    for (const entry of items) {
+        liveLogRenderEntry(entry);
+    }
+    if (liveLogState.autoScroll) {
+        const box = document.getElementById('livelog-box');
+        if (box) box.scrollTop = box.scrollHeight;
+    }
+}
+
+function liveLogSetStatus(text, color) {
+    const el = document.getElementById('livelog-status');
+    if (el) {
+        el.textContent = text;
+        el.style.background = `${color}22`;
+        el.style.color = color;
+        el.style.border = `1px solid ${color}55`;
+    }
+}
+
+function initLiveLogs() {
+    const box = document.getElementById('livelog-box');
+    if (!box) return;
+
+    const base = liveLogApiBase();
+    let es;
+    try {
+        es = new EventSource(`${base}live-logs`);
+    } catch (e) {
+        liveLogSetStatus('UNSUPPORTED', '#f87171');
+        return;
+    }
+    liveLogState.es = es;
+
+    es.onopen = () => liveLogSetStatus('● LIVE', '#34d399');
+    es.onerror = () => liveLogSetStatus('RECONNECTING…', '#fbbf24');
+
+    es.onmessage = (event) => {
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (e) {
+            return;
+        }
+
+        if (data.type === 'buffer' && Array.isArray(data.entries)) {
+            for (const entry of data.entries) liveLogRenderEntry(entry);
+            liveLogSetStatus('● LIVE', '#34d399');
+        } else if (data.type === 'log' && data.entry) {
+            if (liveLogState.paused) {
+                liveLogState.pending.push(data.entry);
+                if (liveLogState.pending.length > 250) liveLogState.pending.shift();
+            } else {
+                liveLogRenderEntry(data.entry);
+            }
+        }
+    };
+
+    // ── Controls ──
+    const pauseBtn = document.getElementById('livelog-pause');
+    if (pauseBtn) {
+        pauseBtn.addEventListener('click', () => {
+            liveLogState.paused = !liveLogState.paused;
+            pauseBtn.textContent = liveLogState.paused ? '▶ Resume' : '⏸ Pause';
+            pauseBtn.style.background = liveLogState.paused
+                ? 'rgba(251, 191, 36, 0.15)'
+                : 'rgba(125, 211, 252, 0.12)';
+            pauseBtn.style.color = liveLogState.paused ? '#fde68a' : '#7dd3fc';
+            if (!liveLogState.paused) liveLogFlushPending();
+        });
+    }
+
+    const autoBtn = document.getElementById('livelog-autoscroll');
+    if (autoBtn) {
+        autoBtn.addEventListener('click', () => {
+            liveLogState.autoScroll = !liveLogState.autoScroll;
+            autoBtn.textContent = `⬇ Auto-scroll: ${liveLogState.autoScroll ? 'ON' : 'OFF'}`;
+            autoBtn.style.color = liveLogState.autoScroll ? '#6ee7b7' : '#9ca3af';
+            if (liveLogState.autoScroll) box.scrollTop = box.scrollHeight;
+        });
+    }
+
+    const clearBtn = document.getElementById('livelog-clear');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            box.innerHTML = '';
+            liveLogState.pending = [];
+            const countEl = document.getElementById('livelog-count');
+            if (countEl) countEl.textContent = '0 lines';
+        });
+    }
+
+    const collapseBtn = document.getElementById('livelog-collapse');
+    if (collapseBtn) {
+        collapseBtn.addEventListener('click', () => {
+            liveLogState.collapsed = !liveLogState.collapsed;
+            box.style.display = liveLogState.collapsed ? 'none' : 'block';
+            collapseBtn.textContent = liveLogState.collapsed ? '▸ Show' : '▾ Hide';
+        });
+    }
+
+    const filterSel = document.getElementById('livelog-filter');
+    if (filterSel) {
+        filterSel.addEventListener('change', async () => {
+            liveLogState.filter = filterSel.value;
+            box.innerHTML = '';
+            // Re-fetch the recent buffer from the server and re-render with the new filter
+            try {
+                const res = await fetch(`${base}live-logs/recent`, { credentials: 'same-origin' });
+                if (res.ok) {
+                    const data = await res.json();
+                    for (const entry of (data.entries || [])) liveLogRenderEntry(entry);
+                }
+            } catch (e) { /* keep whatever is rendered */ }
+        });
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    try { initLiveLogs(); } catch (e) { console.warn('Live logs init failed:', e); }
+});

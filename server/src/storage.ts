@@ -67,15 +67,21 @@ export function saveChunk(
     const rawDir = getRawDir(sessionId);
     fs.mkdirSync(rawDir, { recursive: true });
 
-    // Preserve human-readable chunk filename with date & telemetry
+    // Preserve human-readable chunk filename with date & telemetry.
+    // COMPATIBILITY: supports ALL APK filename schemes —
+    //   Old APK:  chunk_<millis>_hidden_<telemetry>.aac
+    //   New APK:  chunk_<date>_<telemetry>.dat  (AAC content, disguised ext)
+    // Any unexpected extension is normalized to .aac, and the base name is
+    // sanitized so odd characters can never break disk paths or HLS.
     let ext = path.extname(originalFilename) || '.aac';
-    const isDisguised = (ext === '.dat' || ext === '.tmp');
-    if (isDisguised) {
+    const isDisguised = (ext === '.dat' || ext === '.tmp' || ext === '.bin' || ext === '.enc');
+    if (isDisguised || !/^\.(aac|mp3|wav|m4a|ogg)$/i.test(ext)) {
         ext = '.aac';
     }
     let filename: string;
     if (originalFilename && originalFilename.startsWith('chunk_')) {
-        const base = path.basename(originalFilename, path.extname(originalFilename));
+        const rawBase = path.basename(originalFilename, path.extname(originalFilename));
+        const base = rawBase.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 150) || `chunk_${sequenceNum}`;
         filename = `${base}${ext}`;
     } else {
         filename = `chunk_${sequenceNum.toString().padStart(6, '0')}${ext}`;
