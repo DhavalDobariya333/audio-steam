@@ -16,7 +16,7 @@ import path from 'path';
 import fs from 'fs';
 import { 
     HOST, PORT, PUBLIC_DIR, STEALTH_DIR, STEALTH_ROUTE, DASHBOARD_DIR, LISTENER_DIR, STORAGE_ROOT,
-    MAIN_PASSWORD, STEALTH_PASSWORD, DASHBOARD_USERNAME 
+    MAIN_PASSWORD, STEALTH_PASSWORD, DASHBOARD_USERNAME, STALE_SESSION_TIMEOUT_SEC
 } from './config';
 import { 
     SESSION_COOKIE_NAME, parseCookies, verifySessionToken, 
@@ -24,12 +24,12 @@ import {
 } from './auth';
 import { initDatabase, closeDatabase, cleanupStaleSessions } from './database';
 import { ensureStorageRoot } from './storage';
-import { checkFfmpeg, finalizeHLS, recordHlsListener } from './hls';
+import { checkFfmpeg, finalizeHLS, recordHlsListener, backfillHLS } from './hls';
 import broadcastRoutes from './routes/broadcast';
 import dashboardRoutes from './routes/dashboard';
 import listenRoutes from './routes/listen';
 import { initWebSocketServer } from './websocket';
-import { initLiveLogCapture, handleLiveLogSse, getRecentEntries, logApi } from './livelog';
+import { initLiveLogCapture, handleLiveLogSse, getRecentEntries, logApi, handleLiveLogDownload } from './livelog';
 
 // Start capturing ALL console output into the live log ring buffer FIRST,
 // so every boot log (ffmpeg resolution, db init, ...) is visible in the
@@ -155,6 +155,9 @@ app.use('/storage', (req, _res, next) => {
     const match = req.path.match(/^\/sessions\/([^\/]+)\/hls\//);
     if (match) {
         recordHlsListener(match[1]);
+        // BACKFILL: the first listener may have connected long after recording
+        // started — convert all chunks that were missed (runs once per session).
+        backfillHLS(match[1]);
     }
     next();
 }, express.static(path.join(PUBLIC_DIR, 'storage'), {
@@ -225,6 +228,14 @@ app.get(`${STEALTH_ROUTE}/live-logs/recent`, (req, res) => {
     res.json({ status: 'ok', entries: getRecentEntries() });
 });
 
+// Download the FULL persistent log history (rotated files, oldest -> newest)
+app.get(`${STEALTH_ROUTE}/live-logs/download`, (req, res) => {
+    if (req.userRole !== 'stealth') {
+        return res.status(404).send('Not found');
+    }
+    handleLiveLogDownload(req, res);
+});
+
 // Direct routes for /, /dashboard, /listener → serve innocent Main SPA
 app.get(['/', '/dashboard', '/dashboard/*', '/listener', '/listener/*'], (_req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
@@ -245,9 +256,11 @@ async function start(): Promise<void> {
     checkFfmpeg();
 
     // 4. Stale session auto-cleanup (every 30s)
+    //    Default: session ends after STALE_SESSION_TIMEOUT_SEC (600s) with no new chunks.
+    console.log(`[server] Stale session auto-end: ${STALE_SESSION_TIMEOUT_SEC}s idle (change with env STALE_SESSION_TIMEOUT)`);
     const staleInterval = setInterval(() => {
         try {
-            const ended = cleanupStaleSessions(300);
+            const ended = cleanupStaleSessions(STALE_SESSION_TIMEOUT_SEC);
             for (const id of ended) {
                 finalizeHLS(id);
                 console.log(`[server] Auto-ended stale session: ${id}`);

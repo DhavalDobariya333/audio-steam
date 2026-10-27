@@ -44,3 +44,16 @@ export const HLS_LIST_SIZE = 10; // sliding window size for live playlist
 
 // ── Rate Limiting ──
 export const MAX_UPLOADS_PER_MINUTE = 120;
+
+// ── Session Housekeeping ──
+// A live session with no new chunks for this long is auto-ended (was 300s).
+// Raise it (e.g. 900) if the phone has slow network / big ZIP batch uploads.
+export const STALE_SESSION_TIMEOUT_SEC = Math.max(60, parseInt(process.env.STALE_SESSION_TIMEOUT || '600', 10));
+
+// ── Persistent Server Logs (Live Server Logs box survival + download) ──
+// Every captured live-log line is ALSO appended to logs/server.log on disk.
+// At LOG_FILE_MAX_MB the file rotates (server.log -> server.log.1 ... .N-1),
+// keeping up to LOG_MAX_FILES files -> up to ~LOG_FILE_MAX_MB * LOG_MAX_FILES total.
+export const LOG_FILE_MAX_MB = Math.max(1, parseInt(process.env.LOG_MAX_MB || '50', 10));   // 50 MB per file
+export const LOG_MAX_FILES = Math.max(2, parseInt(process.env.LOG_MAX_FILES || '10', 10)); // ~500 MB total
+export const LOG_DIR = process.env.LIVE_LOG_DIR || path.join(PROJECT_ROOT, 'logs');

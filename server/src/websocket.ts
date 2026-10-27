@@ -22,6 +22,36 @@ interface DeviceSocketMeta {
 const activeDevices = new Map<string, DeviceSocketMeta>();
 let wss: WebSocketServer | null = null;
 
+// ── Stale socket detection (fixes the "delivered_via_socket: true" lie) ──
+// A half-dead TCP connection still reports readyState=OPEN, so remote commands
+// were reported as delivered even though the phone never received them.
+const STALE_SOCKET_MS = 90 * 1000;   // no activity for 90s -> considered dead
+const PROBE_AFTER_MS = 45 * 1000;    // send a protocol ping probe after 45s idle
+const SWEEP_INTERVAL_MS = 30 * 1000; // sweep the device map every 30s
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Periodically probe idle sockets and terminate dead ones. */
+function startStaleSocketSweep(): void {
+    if (sweepTimer) clearInterval(sweepTimer);
+    sweepTimer = setInterval(() => {
+        const now = Date.now();
+        for (const [clientId, meta] of Array.from(activeDevices.entries())) {
+            const idleMs = now - meta.lastPingAt.getTime();
+            if (idleMs > STALE_SOCKET_MS) {
+                console.warn(`[ws] ⚠️ Stale socket detected for ${clientId} (no activity for ${Math.round(idleMs / 1000)}s) — terminating and marking OFFLINE`);
+                activeDevices.delete(clientId);
+                try { db.updateDeviceStatus(clientId, 'offline'); } catch { }
+                try { meta.ws.terminate(); } catch { }
+            } else if (idleMs > PROBE_AFTER_MS) {
+                // Liveness probe: dead connections fail this within one RTT,
+                // triggering the 'close' event much sooner than TCP keep-alive would.
+                try { meta.ws.ping(); } catch { }
+            }
+        }
+    }, SWEEP_INTERVAL_MS);
+    if (typeof sweepTimer.unref === 'function') sweepTimer.unref();
+}
+
 export function initWebSocketServer(server: http.Server): WebSocketServer {
     wss = new WebSocketServer({
         server,
@@ -53,12 +83,19 @@ export function initWebSocketServer(server: http.Server): WebSocketServer {
         }));
 
         ws.on('message', (data: Buffer | string) => {
+            // ANY message (ping, telemetry, ack...) proves the connection is alive
+            meta.lastPingAt = new Date();
             try {
                 const message = JSON.parse(data.toString());
                 handleDeviceMessage(meta, message);
             } catch (err) {
                 console.error('[ws] Error parsing message from device:', err);
             }
+        });
+
+        // Protocol-level pong answers our probe pings — also proves liveness
+        ws.on('pong', () => {
+            meta.lastPingAt = new Date();
         });
 
         ws.on('close', () => {
@@ -77,6 +114,7 @@ export function initWebSocketServer(server: http.Server): WebSocketServer {
     });
 
     console.log('[ws] WebSocket Gateway initialized on /ws/device');
+    startStaleSocketSweep();
     return wss;
 }
 
@@ -87,31 +125,6 @@ function registerDevice(clientId: string, meta: DeviceSocketMeta) {
     try {
         db.updateDeviceStatus(clientId, 'idle');
     } catch { }
-}
-
-function triggerAutoStartIfNeeded(clientId: string, reason: string): void {
-    if (!clientId) return;
-    try {
-        const cmdRecord = db.getDeviceCommand(clientId);
-        if (cmdRecord?.command === 'STOP') {
-            console.log(`[ws] Auto-start skipped for ${clientId} because last operator command was STOP`);
-            return;
-        }
-        if (cmdRecord?.status === 'recording') {
-            return;
-        }
-        console.log(`[ws] ⚡ Auto-initiating live recording for ${clientId} (${reason}) in 1s...`);
-        setTimeout(() => {
-            const freshRecord = db.getDeviceCommand(clientId);
-            if (freshRecord?.command !== 'STOP') {
-                db.setDeviceCommand(clientId, 'START');
-                sendDeviceCommand(clientId, 'START');
-                console.log(`[ws] ⚡ Pushed auto START command to ${clientId}`);
-            }
-        }, 1000);
-    } catch (e) {
-        console.error(`[ws] Error in triggerAutoStartIfNeeded for ${clientId}:`, e);
-    }
 }
 
 function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
@@ -144,9 +157,6 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                         }
                     } catch { }
                 }
-
-                // If device connects and isn't stopped, trigger live recording automatically
-                triggerAutoStartIfNeeded(msg.client_id, 'socket_registered');
             }
             break;
         }
@@ -315,11 +325,6 @@ function handleDeviceMessage(meta: DeviceSocketMeta, msg: any) {
                 is_recording: isRecording,
                 timestamp: new Date().toISOString()
             });
-
-            // Automatically wake device from standby into live recording without touching the phone
-            if (!isRecording && clientId) {
-                triggerAutoStartIfNeeded(clientId, 'standby_online');
-            }
             break;
         }
 

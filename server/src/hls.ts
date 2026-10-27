@@ -15,6 +15,7 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import { getHlsDir } from './storage';
+import * as db from './database';
 import { HLS_SEGMENT_DURATION, HLS_LIST_SIZE } from './config';
 
 const execAsync = util.promisify(exec);
@@ -198,10 +199,14 @@ async function _processHlsChunk(
     const segmentFilename = `seg_${sequenceNum.toString().padStart(6, '0')}_${dateStr}.ts`;
     const segmentPath = path.join(hlsDir, segmentFilename);
 
-    // Detect if this segment represents a discontinuity (e.g. Silence skipped or dropped chunks)
+    // Detect if this segment represents a discontinuity (e.g. Silence skipped or dropped chunks).
+    // The max() guard makes backfilled (older) chunks NOT reset the high-water mark,
+    // so live chunks arriving after a backfill are not falsely flagged as discontinuous.
     const prevSeq = lastSequenceNums.get(sessionId);
     const isDiscontinuity = prevSeq !== undefined && sequenceNum > prevSeq + 1;
-    lastSequenceNums.set(sessionId, sequenceNum);
+    if (prevSeq === undefined || sequenceNum > prevSeq) {
+        lastSequenceNums.set(sessionId, sequenceNum);
+    }
 
     if (isDiscontinuity) {
         console.log(`[hls] Discontinuity detected for session ${sessionId}: seq ${prevSeq} -> ${sequenceNum}`);
@@ -303,6 +308,10 @@ async function updateLivePlaylist(
         discontinuity,
     });
 
+    // Keep the playlist strictly ordered by chunk sequence — required because
+    // backfilled segments are processed in a different order than live ones.
+    segments.sort((a, b) => segmentSeqFromFilename(a.filename) - segmentSeqFromFilename(b.filename));
+
     while (segments.length > HLS_LIST_SIZE) {
         segments.shift();
         mediaSequence++;
@@ -373,6 +382,10 @@ async function updateVodPlaylist(
         });
     }
 
+    // Keep the VOD playlist strictly ordered by chunk sequence — backfill can
+    // append older segments after newer live ones, so sorting is mandatory.
+    segments.sort((a, b) => segmentSeqFromFilename(a.filename) - segmentSeqFromFilename(b.filename));
+
     const targetDuration = Math.ceil(Math.max(...segments.map(s => s.duration), HLS_SEGMENT_DURATION));
 
     let m3u8 = '#EXTM3U\n';
@@ -396,8 +409,103 @@ async function updateVodPlaylist(
     await fsPromises.rename(tmpPath, playlistPath);
 }
 
+/** Extract the chunk sequence number from a segment filename, e.g. "seg_000042_....ts" -> 42 */
+function segmentSeqFromFilename(filename: string): number {
+    const m = filename.match(/^seg_(\d+)_/);
+    return m ? parseInt(m[1], 10) : 0;
+}
+
+// ── BACKFILL: sessions that had NO live listener never got HLS segments ──
+const backfilledSessions = new Set<string>();
+
+/** List of chunk sequence numbers that already have a .ts segment on disk. */
+function listExistingSegmentSeqs(hlsDir: string): Set<number> {
+    const have = new Set<number>();
+    try {
+        for (const f of fs.readdirSync(hlsDir)) {
+            const m = f.match(/^seg_(\d+)_/);
+            if (m) have.add(parseInt(m[1], 10));
+        }
+    } catch {
+        // hls dir may not exist yet
+    }
+    return have;
+}
+
+/** Stored chunks (from DB) that still lack an HLS segment, in sequence order. */
+function findMissingChunks(sessionId: string): db.Chunk[] {
+    let chunks: db.Chunk[];
+    try {
+        chunks = db.getSessionChunks(sessionId);
+    } catch {
+        return [];
+    }
+    if (!Array.isArray(chunks) || chunks.length === 0) return [];
+    const have = listExistingSegmentSeqs(getHlsDir(sessionId));
+    return chunks.filter(c => !have.has(c.sequence_num) && c.filepath && fs.existsSync(c.filepath));
+}
+
+/**
+ * BACKFILL — convert every stored chunk that is missing an HLS segment.
+ *
+ * Fixes the "listener connected late" problem: previously segments were only
+ * generated while someone was actively watching, so audio recorded BEFORE the
+ * first listener never appeared in live.m3u8/vod.m3u8 (and if nobody ever
+ * listened, the playlists were never created at all).
+ *
+ * Runs at most once per session while live (cheap no-op afterwards) and is
+ * always re-run by finalizeHLS so sessions that had zero listeners still get
+ * a complete vod.m3u8.
+ */
+export function backfillHLS(sessionId: string): void {
+    if (!ffmpegAvailable) return;
+    if (backfilledSessions.has(sessionId)) return;
+
+    const missing = findMissingChunks(sessionId);
+    if (missing.length === 0) {
+        backfilledSessions.add(sessionId);
+        return;
+    }
+
+    console.log(`[hls] Backfilling ${missing.length} missing segment(s) for session ${sessionId} (audio recorded before first listener)`);
+    // NOTE: this loop runs synchronously -> enqueued in ascending seq order.
+    for (const c of missing) {
+        enqueueHlsTask(sessionId, async () => {
+            try {
+                await _processHlsChunk(sessionId, c.filepath, c.sequence_num, c.received_at, c.duration_ms);
+            } catch (err) {
+                console.error(`[hls] Backfill failed for seq ${c.sequence_num}:`, err);
+            }
+        });
+    }
+    backfilledSessions.add(sessionId);
+}
+
 export function finalizeHLS(sessionId: string): void {
     lastSequenceNums.delete(sessionId);
+
+    // Safety net: convert any chunks still missing segments (e.g. the session ran
+    // its entire life with no listener -> vod.m3u8 would otherwise never exist).
+    let pending = 0;
+    try {
+        const missing = findMissingChunks(sessionId);
+        pending = missing.length;
+        if (pending > 0 && ffmpegAvailable) {
+            console.log(`[hls] Finalizing: converting ${pending} remaining chunk(s) for session ${sessionId}`);
+            for (const c of missing) {
+                enqueueHlsTask(sessionId, async () => {
+                    try {
+                        await _processHlsChunk(sessionId, c.filepath, c.sequence_num, c.received_at, c.duration_ms);
+                    } catch (err) {
+                        console.error(`[hls] Finalize conversion failed for seq ${c.sequence_num}:`, err);
+                    }
+                });
+            }
+        }
+    } catch (e) {
+        console.error('[hls] Finalize backfill error:', e);
+    }
+
     enqueueHlsTask(sessionId, async () => {
         const hlsDir = getHlsDir(sessionId);
         const vodPath = path.join(hlsDir, 'vod.m3u8');

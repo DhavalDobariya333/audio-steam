@@ -1875,6 +1875,17 @@ function initLiveLogs() {
         });
     }
 
+    // Download the FULL persistent log history (rotated files on the server,
+    // oldest first / newest last) — much more than the in-memory buffer.
+    const dlBtn = document.getElementById('livelog-download');
+    if (dlBtn) {
+        dlBtn.addEventListener('click', () => {
+            try {
+                window.open(`${base}live-logs/download`, '_blank');
+            } catch (e) { /* ignore popup blockers */ }
+        });
+    }
+
     const collapseBtn = document.getElementById('livelog-collapse');
     if (collapseBtn) {
         collapseBtn.addEventListener('click', () => {
