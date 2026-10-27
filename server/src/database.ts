@@ -228,8 +228,19 @@ export function getSession(sessionId: string): Session | undefined {
     return queryOne<Session>('SELECT * FROM sessions WHERE session_id = ?', [sessionId]);
 }
 
-export function listSessions(limit: number = 100, offset: number = 0, _streamType?: string): Session[] {
-    return queryAll<Session>('SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?', [limit, offset]);
+export function listSessions(limit: number = 100, offset: number = 0, streamType?: string): Session[] {
+    let sql = 'SELECT * FROM sessions';
+    const params: any[] = [];
+
+    if (streamType) {
+        sql += ' WHERE stream_type = ?';
+        params.push(streamType);
+    }
+
+    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    return queryAll<Session>(sql, params);
 }
 
 export function getActiveSessions(_streamType?: string): Session[] {
@@ -276,8 +287,11 @@ export function deleteSession(sessionId: string): boolean {
     return true;
 }
 
-export function getSessionCount(_streamType?: string): number {
-    const row = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM sessions');
+export function getSessionCount(streamType?: string): number {
+    const sql = streamType
+        ? 'SELECT COUNT(*) as cnt FROM sessions WHERE stream_type = ?'
+        : 'SELECT COUNT(*) as cnt FROM sessions';
+    const row = queryOne<{ cnt: number }>(sql, streamType ? [streamType] : []);
     return row?.cnt ?? 0;
 }
 
@@ -725,4 +739,3 @@ export function getDeviceConfig(clientId: string): any | null {
         return null;
     }
 }
-
