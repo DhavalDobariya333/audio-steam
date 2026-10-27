@@ -25,5 +25,6 @@ RUN npm run build
 # Expose the port the app runs on
 EXPOSE 8765
 
-# Command to run the application
-CMD ["npm", "start"]
+# Run Node directly so the container receives SIGTERM/SIGINT without an npm
+# wrapper reporting the signal as an npm command failure.
+CMD ["node", "dist/index.js"]
