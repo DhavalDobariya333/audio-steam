@@ -171,19 +171,19 @@ export function initLiveLogCapture(): void {
     const origError = console.error.bind(console);
 
     console.log = (...args: unknown[]) => {
-        try { pushLog('log', ...args); } catch { /* ignore */ }
+        try { pushLog('log', args.length > 0 ? stringifyArg(args[0]) : '', ...args.slice(1)); } catch { /* ignore */ }
         origLog(...args);
     };
     console.info = (...args: unknown[]) => {
-        try { pushLog('info', ...args); } catch { /* ignore */ }
+        try { pushLog('info', args.length > 0 ? stringifyArg(args[0]) : '', ...args.slice(1)); } catch { /* ignore */ }
         origInfo(...args);
     };
     console.warn = (...args: unknown[]) => {
-        try { pushLog('warn', ...args); } catch { /* ignore */ }
+        try { pushLog('warn', args.length > 0 ? stringifyArg(args[0]) : '', ...args.slice(1)); } catch { /* ignore */ }
         origWarn(...args);
     };
     console.error = (...args: unknown[]) => {
-        try { pushLog('error', ...args); } catch { /* ignore */ }
+        try { pushLog('error', args.length > 0 ? stringifyArg(args[0]) : '', ...args.slice(1)); } catch { /* ignore */ }
         origError(...args);
     };
 }
