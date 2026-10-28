@@ -28,9 +28,22 @@ router.get('/sessions', (req: Request, res: Response) => {
         const totalCount = db.getSessionCount(streamType);
         const storageInfo = storage.getStorageInfo();
 
+        const sanitizedSessions = streamType === 'main'
+            ? sessions.map(s => {
+                if (s.stream_type === 'both' && s.device_info) {
+                    const parts = s.device_info.split('|').map(p => p.trim());
+                    const base = parts[0] || '';
+                    const battery = parts.find(p => p.includes('🔋')) || '';
+                    const cleanInfo = [base, battery].filter(Boolean).join(' | ');
+                    return { ...s, device_info: cleanInfo || 'Mobile Audio Recording' };
+                }
+                return s;
+            })
+            : sessions;
+
         res.json({
-            sessions,
-            count: sessions.length,
+            sessions: sanitizedSessions,
+            count: sanitizedSessions.length,
             total: totalCount,
             storage: storageInfo,
         });

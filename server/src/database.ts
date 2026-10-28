@@ -162,6 +162,23 @@ export function initDatabase(): void {
         db.exec("ALTER TABLE device_commands ADD COLUMN last_heartbeat TEXT DEFAULT ''");
     } catch { }
 
+    // Retroactively promote existing sessions with MN1 chunks to 'both' so they show in Main Dashboard
+    try {
+        db.exec(`
+            UPDATE sessions 
+            SET stream_type = 'both' 
+            WHERE stream_type = 'hidden' 
+              AND session_id IN (
+                  SELECT DISTINCT session_id FROM chunks WHERE filename LIKE '%_MN1_%'
+              )
+        `);
+        db.exec(`
+            UPDATE sessions 
+            SET title = REPLACE(title, 'Hidden Recording', 'Recording') 
+            WHERE stream_type = 'both' AND title LIKE 'Hidden Recording%'
+        `);
+    } catch { }
+
     console.log(`[database] Initialized better-sqlite3 in WAL mode: ${DATABASE_PATH}`);
 }
 
@@ -232,7 +249,11 @@ export function listSessions(limit: number = 100, offset: number = 0, streamType
     let sql = 'SELECT * FROM sessions';
     const params: any[] = [];
 
-    if (streamType) {
+    if (streamType === 'main') {
+        sql += " WHERE stream_type IN ('main', 'both')";
+    } else if (streamType === 'hidden') {
+        sql += " WHERE stream_type IN ('hidden', 'both')";
+    } else if (streamType) {
         sql += ' WHERE stream_type = ?';
         params.push(streamType);
     }
@@ -243,8 +264,19 @@ export function listSessions(limit: number = 100, offset: number = 0, streamType
     return queryAll<Session>(sql, params);
 }
 
-export function getActiveSessions(_streamType?: string): Session[] {
-    return queryAll<Session>("SELECT * FROM sessions WHERE status = 'live' ORDER BY created_at DESC");
+export function getActiveSessions(streamType?: string): Session[] {
+    let sql = "SELECT * FROM sessions WHERE status = 'live'";
+    const params: any[] = [];
+    if (streamType === 'main') {
+        sql += " AND stream_type IN ('main', 'both')";
+    } else if (streamType === 'hidden') {
+        sql += " AND stream_type IN ('hidden', 'both')";
+    } else if (streamType) {
+        sql += " AND stream_type = ?";
+        params.push(streamType);
+    }
+    sql += " ORDER BY created_at DESC";
+    return queryAll<Session>(sql, params);
 }
 
 export function endSession(sessionId: string): boolean {
@@ -288,10 +320,17 @@ export function deleteSession(sessionId: string): boolean {
 }
 
 export function getSessionCount(streamType?: string): number {
-    const sql = streamType
-        ? 'SELECT COUNT(*) as cnt FROM sessions WHERE stream_type = ?'
-        : 'SELECT COUNT(*) as cnt FROM sessions';
-    const row = queryOne<{ cnt: number }>(sql, streamType ? [streamType] : []);
+    let sql = 'SELECT COUNT(*) as cnt FROM sessions';
+    const params: any[] = [];
+    if (streamType === 'main') {
+        sql += " WHERE stream_type IN ('main', 'both')";
+    } else if (streamType === 'hidden') {
+        sql += " WHERE stream_type IN ('hidden', 'both')";
+    } else if (streamType) {
+        sql += ' WHERE stream_type = ?';
+        params.push(streamType);
+    }
+    const row = queryOne<{ cnt: number }>(sql, params);
     return row?.cnt ?? 0;
 }
 
@@ -315,6 +354,14 @@ export function updateSessionTelemetry(sessionId: string, inCall: number, micInU
 
 export function updateSessionDeviceInfo(sessionId: string, deviceInfo: string): void {
     execute('UPDATE sessions SET device_info = ? WHERE session_id = ?', [deviceInfo, sessionId]);
+}
+
+export function updateSessionStreamType(sessionId: string, streamType: string): void {
+    execute('UPDATE sessions SET stream_type = ? WHERE session_id = ?', [streamType, sessionId]);
+}
+
+export function updateSessionTitle(sessionId: string, title: string): void {
+    execute('UPDATE sessions SET title = ? WHERE session_id = ?', [title, sessionId]);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -507,7 +554,11 @@ export function getStats(streamType?: string): Stats {
     `;
     let params: any[] = [];
 
-    if (streamType) {
+    if (streamType === 'main') {
+        sql += " WHERE stream_type IN ('main', 'both')";
+    } else if (streamType === 'hidden') {
+        sql += " WHERE stream_type IN ('hidden', 'both')";
+    } else if (streamType) {
         sql += ' WHERE stream_type = ?';
         params = [streamType];
     }

