@@ -33,6 +33,10 @@ export const AUTH_SECRET = process.env.AUTH_SECRET || 'audio-stream-auth-key-sec
 // ── Audio ──
 export const CHUNK_DURATION_MS = 2000;
 export const MAX_UPLOAD_SIZE = 5 * 1024 * 1024; // 5 MB per chunk
+export const MAX_ZIP_UPLOAD_SIZE = Math.max(
+    MAX_UPLOAD_SIZE,
+    parseInt(process.env.MAX_ZIP_UPLOAD_SIZE_MB || '100', 10) * 1024 * 1024
+); // default 100 MB for /upload-zip batches
 export const SAMPLE_RATE = 16000;
 export const NUM_CHANNELS = 1;
 export const BITS_PER_SAMPLE = 16;

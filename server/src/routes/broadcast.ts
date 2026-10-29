@@ -21,7 +21,7 @@ import * as storage from '../storage';
 import { appendToHLS, finalizeHLS, hasActiveHlsListener, getFfmpegPath } from '../hls';
 import { sendDeviceCommand, broadcastLiveEvent } from '../websocket';
 import { getClientIp } from '../requestdebug';
-import { MAX_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
+import { MAX_UPLOAD_SIZE, MAX_ZIP_UPLOAD_SIZE, CHUNK_DURATION_MS, PUBLIC_DIR } from '../config';
 
 const router = Router();
 const exportRateLimit = rateLimit({
@@ -35,13 +35,19 @@ const exportRateLimit = rateLimit({
     },
 });
 
-// Multer: store uploaded chunks in memory (they're small — max 5MB)
+// Multer for live chunk uploads: store in memory (small chunks, max 5MB)
 // COMPATIBILITY: use .any() instead of .single('audio') so BOTH old and new
 // APK builds can upload — whichever multipart field name they use (audio,
 // file, chunk, ...) is accepted. The first file part is used as the chunk.
-const upload = multer({
+const chunkUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_UPLOAD_SIZE },
+});
+
+// Multer for offline ZIP backlog uploads (larger than a single live chunk).
+const zipUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_ZIP_UPLOAD_SIZE },
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -83,7 +89,7 @@ router.post('/', (req: Request, res: Response) => {
 // UPLOAD CHUNK
 // ════════════════════════════════════════════════════════════════════════════
 
-router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Response) => {
+router.post('/:session_id/chunk', chunkUpload.any(), async (req: Request, res: Response) => {
     try {
         const session_id = req.params.session_id as string;
         // Old APK: field "audio". New APK: field "audio". Any other name is also accepted.
@@ -335,7 +341,7 @@ router.post('/:session_id/chunk', upload.any(), async (req: Request, res: Respon
  * POST /api/v1/broadcasts/:session_id/upload-zip
  * Batch upload of offline audio chunks packaged as a single ZIP archive.
  */
-router.post('/:session_id/upload-zip', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/:session_id/upload-zip', zipUpload.single('file'), async (req: Request, res: Response) => {
     try {
         const session_id = req.params.session_id as string;
         const file = req.file;
@@ -1196,4 +1202,3 @@ router.use((err: any, req: Request, res: Response, _next: any) => {
 });
 
 export default router;
-
